@@ -65,18 +65,24 @@ except ImportError:  # pragma: no cover
     _add(_unavailable("brotli", "pip install brotli"))
 
 # --- bzip3 ----------------------------------------------------------------
+# bzip3 is block-based; lzbench maps a "level" to block_size via
+# block_size = 1 << (19 + level), capped at 511 MiB. See
+# https://github.com/inikep/lzbench/blob/6ab4808616e5e6163d3f4a898b7527a1940cc35e/bench/symmetric_codecs.cpp#L153
 try:
     import bz3 as _bz3
 
-    _BS = 1 << 20  # 1 MiB block; bzip3 is block-based rather than level-based
-    _add(
-        Codec(
-            "bzip3-1MiB",
-            lambda d: _bz3.compress(d, _BS),
-            lambda c, n: _bz3.decompress(c),
-            note="block_size=1MiB",
+    _BZ3_MAX = 511 << 20  # lzbench cap
+    for _lvl in (1, 5):  # level 1 = 1 MiB, level 5 = 16 MiB block
+        _bs = min(1 << (19 + _lvl), _BZ3_MAX)
+        _mib = _bs >> 20
+        _add(
+            Codec(
+                f"bzip3-{_lvl}",
+                (lambda bs: lambda d: _bz3.compress(d, bs))(_bs),
+                lambda c, n: _bz3.decompress(c),
+                note=f"level={_lvl} block_size={_mib}MiB",
+            )
         )
-    )
 except ImportError:  # pragma: no cover
     _add(_unavailable("bzip3", "pip install bzip3"))
 

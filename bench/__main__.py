@@ -8,24 +8,37 @@ uv run python -m bench formats [imgs..] # compare DIF vs png/jxl/webp/avif/gif
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
 from . import native
 from .compare import compare_image
 from .compare import format_table as compare_table
-from .runner import format_table, run
+from .runner import (
+    TSV_HEADER,
+    format_stats_table,
+    iter_rows,
+    run,
+    subdir_stats,
+)
 
-_IMAGE_EXTS = {".png", ".gif", ".webp", ".bmp", ".jpg", ".jpeg"}
-_DEFAULT_DIR = Path(__file__).parent.parent / "testdata" / "images"
+_IMAGE_EXTS = {".png", ".gif", ".webp", ".bmp", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 
 def _images(passed: list[str]) -> list[str]:
-    if passed:
-        return passed
-    return sorted(
-        str(p) for p in _DEFAULT_DIR.glob("*") if p.suffix.lower() in _IMAGE_EXTS
-    )
+    """Expand each path: a directory yields its images, a file passes through.
+
+    No default — the caller must name the images (or a dir of them).
+    """
+    out: list[str] = []
+    for raw in passed:
+        p = Path(raw)
+        if p.is_dir():
+            out.extend(str(q) for q in p.rglob("*") if q.suffix.lower() in _IMAGE_EXTS)
+        else:
+            out.append(str(p))
+    return sorted(out)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("images", nargs="*")
     c.add_argument("--strategy", default="arithmetic")
     c.add_argument("--repeats", type=int, default=5)
+    c.add_argument(
+        "--out",
+        default="bench-codecs.tsv",
+        help="per-image results written here as TSV (default: bench-codecs.tsv)",
+    )
     f = sub.add_parser("formats", help="compare DIF vs other image formats")
     f.add_argument("images", nargs="*")
     f.add_argument("--repeats", type=int, default=3)
@@ -50,16 +68,28 @@ def main(argv: list[str] | None = None) -> int:
 
     imgs = _images(args.images)
     if not imgs:
-        print("no images; pass paths or populate testdata/images/")
+        print("no images; pass image files or a directory, e.g. testdata/")
         return 1
 
     if args.cmd == "codecs":
-        results, payloads = run(imgs, args.strategy, args.repeats)
-        total = sum(len(b) for _, b in payloads)
-        print(
-            f"# {len(payloads)} images, {total} .difr bytes, strategy={args.strategy}"
-        )
-        print(format_table(results))
+        reports = run(imgs, args.strategy, args.repeats)
+
+        # Per-image rows -> TSV (machine-parseable detail).
+        with open(args.out, "w", newline="") as fh:
+            w = csv.writer(fh, delimiter="\t")
+            w.writerow(TSV_HEADER)
+            w.writerows(iter_rows(reports))
+
+        total = sum(r.difr_bytes for r in reports)
+        print(f"# {len(reports)} images, {total} .difr bytes, strategy={args.strategy}")
+        print(f"# per-image detail -> {args.out}")
+        print("# C,D measured against each image's memcpy baseline\n")
+
+        # Aggregate per directory, recursively (markdown tables).
+        for label, stats in subdir_stats(reports):
+            print(f"### {label}/  (M aggregated over images beneath)")
+            print(format_stats_table(stats))
+            print()
     elif args.cmd == "formats":
         for p in imgs:
             print(compare_table(p, compare_image(p, args.repeats)))
