@@ -50,6 +50,39 @@ def test_gray_source_theme_lossless(tmp_path, strategy):
     assert np.array_equal(got, arr)
 
 
+@pytest.mark.parametrize(
+    "codec,want_id,want_level",
+    [
+        ("zstd-3", 4, 3),
+        ("zstd-10", 4, 10),
+        ("brotli-5", 2, 5),
+        ("brotli-11", 2, 11),
+        ("libdeflate-6", 1, 6),
+        ("lz4-fast1", 5, 1),
+        ("lzav-1", 6, 1),
+    ],
+)
+def test_dif_codec_variants_roundtrip(tmp_path, codec, want_id, want_level):
+    path, arr = _save_color(tmp_path)
+    img = image_to_dif_image(path, strategy="keep")
+    blob = img.to_dif(codec)
+    # Header records (codec byte, level byte) at offsets 5 and 6.
+    assert blob[:4] == b"DIF1"
+    assert blob[5] == want_id
+    assert blob[6] == want_level
+    back = dif.Image.from_dif(blob)
+    _, _, rgba = back.render("light", 0)
+    got = np.frombuffer(rgba, np.uint8).reshape(8, 8, 4)
+    assert np.array_equal(got, arr)
+
+
+def test_dif_default_codec_is_zstd3(tmp_path):
+    path, _ = _save_color(tmp_path)
+    img = image_to_dif_image(path, strategy="keep")
+    blob = img.to_dif()  # no-arg default
+    assert blob[5] == 4 and blob[6] == 3  # zstd, level 3
+
+
 def test_keep_strategy_single_theme(tmp_path):
     path, _ = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy="keep")

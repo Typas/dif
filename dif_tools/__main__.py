@@ -26,9 +26,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     conv.add_argument(
         "--codec",
-        choices=("store", "deflate", "brotli"),
-        default="brotli",
-        help="compression codec for .dif (default: brotli)",
+        choices=(
+            "store",
+            "libdeflate-6",
+            "brotli-5",
+            "brotli-11",
+            "zstd-3",
+            "zstd-10",
+            "lz4-fast1",
+            "lzav-1",
+        ),
+        default="zstd-3",
+        help="compression codec variant for .dif (default: zstd-3)",
     )
     conv.add_argument(
         "--raw", action="store_true", help="write uncompressed .difr instead"

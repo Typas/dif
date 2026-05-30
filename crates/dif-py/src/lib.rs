@@ -34,17 +34,28 @@ fn mode_tag(s: &str) -> PyResult<ModeTag> {
     }
 }
 
-fn codec_id(s: &str) -> PyResult<CodecId> {
-    match s {
-        "store" => Ok(CodecId::Store),
-        "deflate" => Ok(CodecId::Deflate),
-        "brotli" => Ok(CodecId::Brotli),
-        "xz" => Ok(CodecId::Xz),
-        "zstd" => Ok(CodecId::Zstd),
-        _ => Err(PyValueError::new_err(
-            "codec must be 'store', 'deflate', 'brotli', 'xz', or 'zstd'",
-        )),
-    }
+/// Map a codec string to `(family, level)`. Accepts the study's 7 variant
+/// strings; bare family names alias their study-chosen default level. This is
+/// the single source of truth for per-family level semantics.
+fn codec_id(s: &str) -> PyResult<(CodecId, u8)> {
+    let pair = match s {
+        "store" => (CodecId::Store, 0),
+        "deflate" | "libdeflate" | "deflate-6" | "libdeflate-6" => (CodecId::Deflate, 6),
+        "brotli" | "brotli-5" => (CodecId::Brotli, 5),
+        "brotli-11" => (CodecId::Brotli, 11),
+        "zstd" | "zstd-3" => (CodecId::Zstd, 3),
+        "zstd-10" => (CodecId::Zstd, 10),
+        "lz4" | "lz4-fast1" => (CodecId::Lz4, 1),
+        "lzav" | "lzav-1" => (CodecId::Lzav, 1),
+        _ => {
+            return Err(PyValueError::new_err(
+                "codec must be one of: store, deflate/libdeflate-6, brotli-5, brotli-11, \
+                 zstd-3, zstd-10, lz4-fast1, lzav-1 \
+                 (bare family names alias the study default level)",
+            ))
+        }
+    };
+    Ok(pair)
 }
 
 fn build_themes(themes: Vec<(u8, String)>) -> PyResult<Vec<Theme>> {
@@ -130,10 +141,13 @@ impl Image {
         Ok(Image { inner })
     }
 
-    /// Encode to a compressed `.dif` container.
-    #[pyo3(signature = (codec="brotli"))]
+    /// Encode to a compressed `.dif` container. `codec` is a single variant
+    /// string (e.g. `"zstd-3"`, `"brotli-11"`, `"lz4-fast1"`); the level is
+    /// carried by the string, so there is no separate level argument.
+    #[pyo3(signature = (codec="zstd-3"))]
     fn to_dif<'py>(&self, py: Python<'py>, codec: &str) -> PyResult<Bound<'py, PyBytes>> {
-        let bytes = to_dif(&self.inner, codec_id(codec)?).map_err(map_err)?;
+        let (id, level) = codec_id(codec)?;
+        let bytes = to_dif(&self.inner, id, level).map_err(map_err)?;
         Ok(PyBytes::new(py, &bytes))
     }
 

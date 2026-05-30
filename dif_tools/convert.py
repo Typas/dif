@@ -8,6 +8,7 @@ The *source* theme is always stored as the lossless identity.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import dif
 import numpy as np
@@ -94,16 +95,18 @@ def convert_file(
     input_path: str | Path,
     output_path: str | Path | None = None,
     strategy: str = "arithmetic",
-    codec: str = "brotli",
+    codec: str = "zstd-3",
     raw: bool = False,
 ) -> bytes:
     """Convert an image to ``.dif`` (or ``.difr`` if ``raw``); returns the bytes.
 
-    A ``.drawio`` input is rendered to PNG first (handled by
-    :func:`image_to_dif_image`).
+    ``codec`` is one of the study's variant strings (e.g. ``"zstd-3"``,
+    ``"brotli-11"``, ``"lz4-fast1"``); see :data:`dif.CodecName`. A ``.drawio``
+    input is rendered to PNG first (handled by :func:`image_to_dif_image`).
     """
     img = image_to_dif_image(input_path, strategy=strategy)
-    data = img.to_difr() if raw else img.to_dif(codec)
+    # `codec` arrives as a runtime str (CLI/argparse); narrow to the typed alias.
+    data = img.to_difr() if raw else img.to_dif(cast("dif.CodecName", codec))
     if output_path is not None:
         Path(output_path).write_bytes(data)
     return data
