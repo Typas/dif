@@ -15,10 +15,11 @@
 //!
 //! # Build features
 //!
-//! The crate is `no_std` + `alloc` by default (store / deflate / xz). It always
+//! The crate is `no_std` + `alloc` by default (store / deflate / lz4). It always
 //! needs a heap allocator — the codec decode windows are runtime-sized — so a
 //! `no_std` binary linking this crate must install a `#[global_allocator]`.
-//! `std` adds the Brotli codec; `native` adds zstd and a liblzma XZ encoder.
+//! `std` adds the Brotli codec; `native` adds zstd, a libdeflate encoder, and
+//! the lzav C shim.
 
 // `no_std` for the real library build; tests need std for the libtest harness.
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]

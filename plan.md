@@ -29,6 +29,14 @@ Inspired by GIF, use color palette to create mapping. One new thing, color theme
 - Candidates: libdeflate level 6 (baseline); brotli level 5, 11; bzip3 level 1, 5; kanzi level 1, 2; lz4hc level 4, 9; lz4 fast level 1; lzav level 1; zstd fast level 1; zstd level 3, 10, 22.
 - Chosen: zstd level 3 (best, default), lzav level 1 (fast), zstd level 10 (medium-high ratio), lz4 fast level 1 (fastest), brotli level 5 (high ratio), libdeflate level 6 (legacy support), brotli level 11 (extreme high ratio).
 - Eliminated: bzip3 (slow), kanzi (unstable), lz4hc (slow on compression), zstd level 22 (slow on compression).
+- Wired into `.dif`: the 7 chosen variants map to (codec byte, level byte) pairs;
+  the header carries both. XZ was dropped from the format (LZMA range-coder,
+  bzip3-like, weak lzbench position — not a chosen variant); its codec id 3 is now
+  reserved/rejected.
+- Future candidate (not benched yet): **zxc** — asymmetric lossless, WORM profile
+  (heavy encode / very fast decode, >40% faster than LZ4 on ARM64), which fits
+  `.dif`'s encode-once/decode-many access pattern. Early stage; record for a future
+  sweep. https://github.com/hellobertrand/zxc
 
 ## Implementation
 

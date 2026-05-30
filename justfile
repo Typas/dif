@@ -7,7 +7,7 @@ default:
 
 # --- Rust core (dif-core) -------------------------------------------------
 
-# Build the no_std+alloc default (store/deflate/xz); clean build = portability check.
+# Build the no_std+alloc default (store/deflate/lz4); clean build = portability check.
 build:
     cargo build -p dif-core
 
@@ -20,11 +20,11 @@ build-native:
 # Assert the portable core stays no_std (alias for the default build).
 check-nostd: build
 
-# Test the core. Bare run = std under cfg(test): store / deflate / xz.
+# Test the core. Bare run = std under cfg(test): store / deflate / lz4.
 test:
     cargo test -p dif-core
 
-# `native` pulls in brotli + zstd and the liblzma XZ path.
+# `native` pulls in brotli + zstd + the libdeflate encoder + the lzav C shim.
 test-native:
     cargo test -p dif-core --features native
 

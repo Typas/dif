@@ -22,7 +22,9 @@ use crate::error::{DifError, Result};
 use crate::{varint, Content, DifImage, ModeTag, Rgba, SampleDepth, Theme};
 
 pub(crate) const MAGIC_RAW: [u8; 4] = *b"DIFR";
-pub(crate) const VERSION: u8 = 1;
+// v2: `.dif` header gained a `level:u8` byte after `codec:u8`; codec id 3 (Xz)
+// removed; ids 5 (Lz4) / 6 (Lzav) added. Breaking — old readers reject v2.
+pub(crate) const VERSION: u8 = 2;
 
 const FLAG_GRAYSCALE: u8 = 1 << 0;
 const FLAG_DEPTH16: u8 = 1 << 1;

@@ -1,0 +1,10 @@
+[package]
+name = "lzav-shim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Static C-shim wrapping avaneev/lzav for dif-core's native codec path."
+build = "build.rs"
+
+[build-dependencies]
+cc = "1"

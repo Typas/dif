@@ -41,11 +41,14 @@ Two serializations share one *body* (#ref(<body>)):
 - `.dif`  — compressed, magic `DIF1`:
 
 ```text
-magic:"DIF1"  version:u8  codec:u8  raw_len:u64-LE   compressed_body[]
+magic:"DIF1"  version:u8  codec:u8  level:u8  raw_len:u64-LE   compressed_body[]
 ```
 
-`codec` selects the decompressor (#ref(<codecs>)); `raw_len` is the body length
-before compression. All multi-byte integers are little-endian.
+`codec` selects the decompressor (#ref(<codecs>)); `level` records which level of
+that codec family produced the body (e.g. `zstd-3` vs `zstd-10`). Every codec's
+stream is self-describing, so `level` is kept for provenance/forward-compat and is
+*not consumed by decode*. `raw_len` is the body length before compression. All
+multi-byte integers are little-endian.
 
 = Body layout <body>
 
@@ -117,28 +120,33 @@ Three strategies (the source theme is always the lossless identity):
 
 = Compression codecs <codecs>
 
-A `.dif` names its codec by id. `dif-core` is `no_std` + `alloc` by default,
-exposing the portable, pure-Rust set — store, DEFLATE, XZ (ids 0, 1, 3) — which
-decodes in the WebAssembly build with no native dependencies. Two Cargo features
-add the rest. The `std` feature adds Brotli (id 2): it is pure-Rust but its
-streaming encoder/decoder need the standard library, which wasm provides, so it
-stays wasm-decodable. The `native` feature adds Zstandard (C-linked `zstd-safe`,
-id 4) plus a faster liblzma XZ encoder, and is unavailable in wasm. A heap
+A `.dif` names its codec by id and records the codec *level* in the header.
+`dif-core` is `no_std` + `alloc` by default, exposing the portable, pure-Rust
+set — store, DEFLATE, LZ4 (ids 0, 1, 5) — which decodes in the WebAssembly build
+with no native dependencies. Two Cargo features add the rest. The `std` feature
+adds Brotli (id 2): it is pure-Rust but its streaming encoder/decoder need the
+standard library, which wasm provides, so it stays wasm-decodable. The `native`
+feature adds Zstandard (C-linked `zstd-safe`, id 4), a `libdeflate` DEFLATE
+encoder, and LZAV (C shim, id 6). The native C codecs are unavailable in the
+plain wasm build, but reach the browser decoder when cross-compiled with `zig`
+(the `wasm-native` build). Id 3 is reserved (formerly XZ, removed). A heap
 allocator is always required; a `no_std` host must install a `#[global_allocator]`.
 
 #table(
   columns: (auto, auto, auto, auto, auto),
   table.header([*id*], [*codec*], [*library*], [*feature*], [*wasm*]),
   [0], [store (raw)], [—], [default], [yes],
-  [1], [DEFLATE], [`miniz_oxide`], [default], [yes],
-  [2], [Brotli], [`brotli` (pure Rust)], [`std`], [yes],
-  [3],
-  [XZ],
-  [`lzma-rust2` (decode); `xz2`/liblzma encode under `native`],
+  [1],
+  [DEFLATE],
+  [`miniz_oxide` (decode); `libdeflater` encode under `native`],
   [default],
   [yes],
 
-  [4], [Zstandard], [`zstd-safe`], [`native`], [no],
+  [2], [Brotli], [`brotli` (pure Rust)], [`std`], [yes],
+  [3], [_reserved_ (was XZ)], [—], [—], [—],
+  [4], [Zstandard], [`zstd-safe`], [`native`], [`wasm-native`],
+  [5], [LZ4], [`lz4_flex` (pure Rust)], [default], [yes],
+  [6], [LZAV], [`lzav-shim` (C)], [`native`], [`wasm-native`],
 )
 
 XZ is interoperable across libraries: a `.dif` encoded by liblzma (`xz2`) decodes

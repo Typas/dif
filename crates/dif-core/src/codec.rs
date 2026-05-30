@@ -1,13 +1,19 @@
-//! Compressed `.dif` container: a small header naming the codec, then the
-//! losslessly compressed `.difr` body.
+//! Compressed `.dif` container: a small header naming the codec and the level
+//! that produced it, then the losslessly compressed `.difr` body.
 //!
 //! ```text
-//! magic:"DIF1"  version:u8  codec:u8  raw_len:u64   compressed_body:[u8]
+//! magic:"DIF1"  version:u8  codec:u8  level:u8  raw_len:u64   compressed_body:[u8]
 //! ```
 //!
+//! The `level` byte records *which level* of the codec family produced the body
+//! (e.g. `zstd-3` vs `zstd-10`). It is informational/forward-compatible: every
+//! supported codec's compressed stream is self-describing, so `decompress`
+//! reads the level from the header but does **not** pass it to the decoder.
+//!
 //! Codecs should prefer a pure-Rust implementation so the decoder compiles to
-//! wasm; native-only codecs (e.g. `Zstd`) are allowed but unavailable in the
-//! wasm decoder. The benchmark studies many more codecs over the `.difr` body.
+//! wasm; native-only codecs (e.g. `Zstd`, `Lzav`) are allowed but unavailable in
+//! the portable wasm decoder. The benchmark studies many more codecs over the
+//! `.difr` body.
 
 use alloc::vec::Vec;
 
@@ -19,22 +25,26 @@ const MAGIC_DIF: [u8; 4] = *b"DIF1";
 
 /// Compression algorithm used for a `.dif` body.
 ///
-/// `Store`/`Deflate`/`Xz` are pure-Rust and decode in the default no_std build.
-/// `Brotli` requires the `std` feature; `Zstd` requires `native` (C-linked
-/// `zstd-safe`). Both are unavailable in a no_std build.
+/// `Store`/`Deflate`/`Lz4` are pure-Rust and decode in the default no_std build.
+/// `Brotli` requires the `std` feature; `Zstd` and `Lzav` require `native`
+/// (C-linked `zstd-safe` / the `lzav-shim` C shim) and are unavailable in a
+/// no_std build. Byte 3 is reserved (formerly `Xz`, removed) and rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CodecId {
     /// No compression — body stored verbatim.
     Store = 0,
-    /// DEFLATE via `miniz_oxide`.
+    /// DEFLATE via `miniz_oxide` (decode); `libdeflater` encoder under `native`.
     Deflate = 1,
-    /// Brotli (`brotli` crate). Requires the `std` feature. Default for production files.
+    /// Brotli (`brotli` crate). Requires the `std` feature.
     Brotli = 2,
-    /// XZ — pure-Rust `lzma-rust2` (decode), `xz2`/liblzma encode under `native`.
-    Xz = 3,
+    // 3 = reserved (was Xz, removed).
     /// Zstandard via `zstd-safe`. Requires the `native` feature.
     Zstd = 4,
+    /// LZ4 block via `lz4_flex` (pure-Rust, portable + wasm-decodable).
+    Lz4 = 5,
+    /// LZAV via the vendored `lzav-shim` C shim. Requires the `native` feature.
+    Lzav = 6,
 }
 
 impl CodecId {
@@ -43,23 +53,30 @@ impl CodecId {
             0 => Ok(CodecId::Store),
             1 => Ok(CodecId::Deflate),
             2 => Ok(CodecId::Brotli),
-            3 => Ok(CodecId::Xz),
             4 => Ok(CodecId::Zstd),
+            5 => Ok(CodecId::Lz4),
+            6 => Ok(CodecId::Lzav),
             _ => Err(DifError::BadCodec(v)),
         }
     }
 }
 
-fn compress(codec: CodecId, data: &[u8]) -> Result<Vec<u8>> {
+/// Compress `data` with `codec` at `level`. The per-family meaning of `level`:
+/// Deflate 0–9 (libdeflate 1–12), Brotli quality 0–11, Zstd 1–22, Lz4/Lzav
+/// ignore it (only their fast level is wired). `Store` ignores it too.
+fn compress(data: &[u8], codec: CodecId, level: u8) -> Result<Vec<u8>> {
     match codec {
         CodecId::Store => Ok(data.to_vec()),
-        CodecId::Deflate => Ok(miniz_oxide::deflate::compress_to_vec(data, 6)),
-        CodecId::Brotli => brotli_compress(data),
-        CodecId::Xz => xz_compress(data),
-        CodecId::Zstd => zstd_compress(data),
+        CodecId::Deflate => deflate_compress(data, level),
+        CodecId::Brotli => brotli_compress(data, level),
+        CodecId::Zstd => zstd_compress(data, level),
+        CodecId::Lz4 => Ok(lz4_flex::block::compress(data)),
+        CodecId::Lzav => lzav_compress(data),
     }
 }
 
+/// Decompress `data` (known uncompressed size `raw_len`). The header's level
+/// byte is not needed — every codec's stream is self-describing.
 fn decompress(codec: CodecId, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     match codec {
         CodecId::Store => Ok(data.to_vec()),
@@ -67,19 +84,65 @@ fn decompress(codec: CodecId, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
             miniz_oxide::inflate::decompress_to_vec(data).map_err(|_| DifError::CompressionFailed)
         }
         CodecId::Brotli => brotli_decompress(data, raw_len),
-        CodecId::Xz => xz_decompress(data, raw_len),
         CodecId::Zstd => zstd_decompress(data, raw_len),
+        CodecId::Lz4 => {
+            lz4_flex::block::decompress(data, raw_len).map_err(|_| DifError::CompressionFailed)
+        }
+        CodecId::Lzav => lzav_decompress(data, raw_len),
     }
+}
+
+// --- Deflate: miniz_oxide encoder by default; libdeflate encoder under `native`.
+//     Both emit a standard raw DEFLATE stream, decoded by miniz_oxide everywhere.
+
+#[cfg(not(feature = "native"))]
+fn deflate_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
+    Ok(miniz_oxide::deflate::compress_to_vec(data, level))
+}
+
+#[cfg(feature = "native")]
+fn deflate_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
+    use libdeflater::{CompressionLvl, Compressor};
+    let lvl = CompressionLvl::new(level as i32).map_err(|_| DifError::CompressionFailed)?;
+    let mut c = Compressor::new(lvl);
+    let mut out = vec![0u8; c.deflate_compress_bound(data.len())];
+    let n = c
+        .deflate_compress(data, &mut out)
+        .map_err(|_| DifError::CompressionFailed)?;
+    out.truncate(n);
+    Ok(out)
+}
+
+// --- Lzav: native-only C shim. `lzav-1` is the single wired level. ---
+
+#[cfg(feature = "native")]
+fn lzav_compress(data: &[u8]) -> Result<Vec<u8>> {
+    lzav_shim::compress(data).ok_or(DifError::CompressionFailed)
+}
+
+#[cfg(feature = "native")]
+fn lzav_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
+    lzav_shim::decompress(data, raw_len).ok_or(DifError::CompressionFailed)
+}
+
+#[cfg(not(feature = "native"))]
+fn lzav_compress(_data: &[u8]) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("lzav codec requires the `native` feature"))
+}
+
+#[cfg(not(feature = "native"))]
+fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("lzav codec requires the `native` feature"))
 }
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
 
 #[cfg(feature = "std")]
-fn brotli_compress(data: &[u8]) -> Result<Vec<u8>> {
+fn brotli_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
     use std::io::Write as _;
     let mut out = Vec::new();
     {
-        let mut w = brotli::CompressorWriter::new(&mut out, 4096, 9, 22);
+        let mut w = brotli::CompressorWriter::new(&mut out, 4096, level as u32, 22);
         w.write_all(data).map_err(|_| DifError::CompressionFailed)?;
     }
     Ok(out)
@@ -96,7 +159,7 @@ fn brotli_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "std"))]
-fn brotli_compress(_data: &[u8]) -> Result<Vec<u8>> {
+fn brotli_compress(_data: &[u8], _level: u8) -> Result<Vec<u8>> {
     Err(DifError::Invalid("brotli codec requires the `std` feature"))
 }
 
@@ -105,55 +168,12 @@ fn brotli_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("brotli codec requires the `std` feature"))
 }
 
-// --- XZ: pure-Rust lzma-rust2 by default; faster liblzma (xz2) under `native` ---
-
-#[cfg(not(feature = "native"))]
-fn xz_compress(data: &[u8]) -> Result<Vec<u8>> {
-    // lzma-rust2 is built without its `std` feature, so it exposes its own
-    // no_std `Read`/`Write` traits and `Vec<u8>` writer.
-    use lzma_rust2::{Write as _, XzOptions, XzWriter};
-    let mut w = XzWriter::new(Vec::new(), XzOptions::with_preset(6))
-        .map_err(|_| DifError::CompressionFailed)?;
-    w.write_all(data).map_err(|_| DifError::CompressionFailed)?;
-    w.finish().map_err(|_| DifError::CompressionFailed)
-}
-
-#[cfg(not(feature = "native"))]
-fn xz_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
-    use lzma_rust2::{Read as _, XzReader};
-    // Body length is known, so fill an exact buffer with `read_exact` — no
-    // `read_to_end` (an alloc/std helper) needed.
-    let mut out = alloc::vec![0u8; raw_len];
-    XzReader::new(data, true)
-        .read_exact(&mut out)
-        .map_err(|_| DifError::CompressionFailed)?;
-    Ok(out)
-}
-
-#[cfg(feature = "native")]
-fn xz_compress(data: &[u8]) -> Result<Vec<u8>> {
-    use std::io::Write as _;
-    let mut e = xz2::write::XzEncoder::new(Vec::new(), 6);
-    e.write_all(data).map_err(|_| DifError::CompressionFailed)?;
-    e.finish().map_err(|_| DifError::CompressionFailed)
-}
-
-#[cfg(feature = "native")]
-fn xz_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
-    use std::io::Read as _;
-    let mut out = Vec::with_capacity(raw_len);
-    xz2::read::XzDecoder::new(data)
-        .read_to_end(&mut out)
-        .map_err(|_| DifError::CompressionFailed)?;
-    Ok(out)
-}
-
 // --- Zstd: only with the `native` feature (zstd-safe links C zstd) ---
 
 #[cfg(feature = "native")]
-fn zstd_compress(data: &[u8]) -> Result<Vec<u8>> {
+fn zstd_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
     let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
-    let n = zstd_safe::compress(out.as_mut_slice(), data, 19)
+    let n = zstd_safe::compress(out.as_mut_slice(), data, level as i32)
         .map_err(|_| DifError::CompressionFailed)?;
     out.truncate(n);
     Ok(out)
@@ -169,7 +189,7 @@ fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "native"))]
-fn zstd_compress(_data: &[u8]) -> Result<Vec<u8>> {
+fn zstd_compress(_data: &[u8], _level: u8) -> Result<Vec<u8>> {
     Err(DifError::Invalid(
         "zstd codec requires the `native` feature",
     ))
@@ -182,17 +202,19 @@ fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     ))
 }
 
-/// Serialize and compress an image into a `.dif` container.
-pub fn to_dif(img: &DifImage, codec: CodecId) -> Result<Vec<u8>> {
+/// Serialize and compress an image into a `.dif` container at codec `level`.
+/// The level is recorded in the header for provenance; decode ignores it.
+pub fn to_dif(img: &DifImage, codec: CodecId, level: u8) -> Result<Vec<u8>> {
     img.validate()?;
     let mut body = Vec::new();
     format::write_body(img, &mut body);
-    let compressed = compress(codec, &body)?;
+    let compressed = compress(&body, codec, level)?;
 
-    let mut out = Vec::with_capacity(compressed.len() + 14);
+    let mut out = Vec::with_capacity(compressed.len() + 15);
     out.extend_from_slice(&MAGIC_DIF);
     out.push(VERSION);
     out.push(codec as u8);
+    out.push(level);
     out.extend_from_slice(&(body.len() as u64).to_le_bytes());
     out.extend_from_slice(&compressed);
     Ok(out)
@@ -200,7 +222,7 @@ pub fn to_dif(img: &DifImage, codec: CodecId) -> Result<Vec<u8>> {
 
 /// Parse and decompress a `.dif` container.
 pub fn from_dif(bytes: &[u8]) -> Result<DifImage> {
-    if bytes.len() < 14 {
+    if bytes.len() < 15 {
         return Err(DifError::UnexpectedEof);
     }
     let magic = [bytes[0], bytes[1], bytes[2], bytes[3]];
@@ -211,8 +233,9 @@ pub fn from_dif(bytes: &[u8]) -> Result<DifImage> {
         return Err(DifError::BadVersion(bytes[4]));
     }
     let codec = CodecId::from_u8(bytes[5])?;
-    let raw_len = u64::from_le_bytes(bytes[6..14].try_into().unwrap()) as usize;
-    let body = decompress(codec, &bytes[14..], raw_len)?;
+    // bytes[6] = level: self-describing streams don't need it on decode.
+    let raw_len = u64::from_le_bytes(bytes[7..15].try_into().unwrap()) as usize;
+    let body = decompress(codec, &bytes[15..], raw_len)?;
     if body.len() != raw_len {
         return Err(DifError::Invalid("decompressed length mismatch"));
     }
@@ -253,29 +276,43 @@ mod tests {
     #[test]
     fn dif_roundtrip_all_codecs() {
         let img = sample();
-        // `mut`/pushes are feature-gated; with no features only the base set exists.
+        // (codec, level). `mut`/pushes are feature-gated; with no features only
+        // the portable set (Store/Deflate/Lz4) exists.
         #[allow(unused_mut)]
-        let mut codecs = vec![CodecId::Store, CodecId::Deflate, CodecId::Xz];
+        let mut codecs = vec![
+            (CodecId::Store, 0u8),
+            (CodecId::Deflate, 6),
+            (CodecId::Lz4, 1),
+        ];
         #[cfg(feature = "std")]
-        codecs.push(CodecId::Brotli);
+        codecs.push((CodecId::Brotli, 5));
         #[cfg(feature = "native")]
-        codecs.push(CodecId::Zstd);
-        for codec in codecs {
-            let bytes = to_dif(&img, codec).unwrap();
+        {
+            codecs.push((CodecId::Zstd, 3));
+            codecs.push((CodecId::Lzav, 1));
+        }
+        for (codec, level) in codecs {
+            let bytes = to_dif(&img, codec, level).unwrap();
             assert_eq!(&bytes[..4], b"DIF1");
             assert_eq!(bytes[5], codec as u8);
+            assert_eq!(bytes[6], level, "level byte for {codec:?}");
             let back = from_dif(&bytes).unwrap();
             assert_eq!(img, back, "codec {codec:?}");
         }
     }
 
     #[test]
-    fn xz_cross_lib_interop() {
-        // A .dif written here (lzma-rust2 by default, xz2 under `native`) must
-        // round-trip through the decoder regardless of which lib produced it.
+    #[cfg(feature = "native")]
+    fn zstd_level_roundtrip() {
+        // Different levels produce different bodies but both decode equal — the
+        // level byte is recorded yet not consumed by decode.
         let img = sample();
-        let bytes = to_dif(&img, CodecId::Xz).unwrap();
-        assert_eq!(from_dif(&bytes).unwrap(), img);
+        let lo = to_dif(&img, CodecId::Zstd, 3).unwrap();
+        let hi = to_dif(&img, CodecId::Zstd, 10).unwrap();
+        assert_eq!(lo[6], 3);
+        assert_eq!(hi[6], 10);
+        assert_eq!(from_dif(&lo).unwrap(), img);
+        assert_eq!(from_dif(&hi).unwrap(), img);
     }
 
     #[test]
@@ -298,15 +335,23 @@ mod tests {
             },
             frame_delays: vec![0],
         };
-        let store = to_dif(&img, CodecId::Store).unwrap().len();
-        let brotli = to_dif(&img, CodecId::Brotli).unwrap().len();
+        let store = to_dif(&img, CodecId::Store, 0).unwrap().len();
+        let brotli = to_dif(&img, CodecId::Brotli, 5).unwrap().len();
         assert!(brotli < store, "brotli {brotli} should beat store {store}");
     }
 
     #[test]
     fn bad_codec_byte_rejected() {
-        let mut bytes = to_dif(&sample(), CodecId::Store).unwrap();
+        let mut bytes = to_dif(&sample(), CodecId::Store, 0).unwrap();
         bytes[5] = 99;
         assert!(matches!(from_dif(&bytes), Err(DifError::BadCodec(99))));
+    }
+
+    #[test]
+    fn reserved_codec_byte_3_rejected() {
+        // Byte 3 was Xz; it must now be rejected as unknown.
+        let mut bytes = to_dif(&sample(), CodecId::Store, 0).unwrap();
+        bytes[5] = 3;
+        assert!(matches!(from_dif(&bytes), Err(DifError::BadCodec(3))));
     }
 }
