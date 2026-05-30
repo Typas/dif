@@ -26,6 +26,9 @@ spec/*.pdf
 !testdata/**/*.difr
 !web/*.dif
 
+# Generated artifacts (rendered PNGs, converted files, bench scratch)
+/out/
+
 # Benchmark output / built native shims
 bench-codecs.tsv
 bench-codecs-*.tsv

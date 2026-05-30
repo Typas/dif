@@ -1,0 +1,3 @@
+[submodule "third_party/drawio"]
+	path = third_party/drawio
+	url = https://github.com/jgraph/drawio

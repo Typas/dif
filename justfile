@@ -51,6 +51,22 @@ py:
 wasm:
     wasm-pack build crates/dif-wasm --target web --out-dir "$PWD/web/pkg"
 
+# --- drawio rendering (local container) ------------------------------------
+# rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
+# run one-shot per file. Fully local, no diagrams.net. dif_tools.drawio drives
+# it (copies the diagram into a scratch dir, reads /data/out/diagram.png back).
+
+drawio_image := "docker.io/rlespinasse/drawio-export:v4.52.0"
+
+# Pull the render image (and install the extension deps via pnpm).
+drawio-setup:
+    podman pull {{drawio_image}}
+    pnpm --dir extension install
+
+# Render a .drawio to PNG via the local container.
+drawio-png IN OUT:
+    uv run python -c "from dif_tools.drawio import render_drawio_to_png as r; print(r('{{IN}}', '{{OUT}}'))"
+
 # --- Python tools / tests -------------------------------------------------
 
 # Build optional native benchmark codecs (lzav + kanzi shim).
