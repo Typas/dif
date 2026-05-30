@@ -25,8 +25,10 @@ Inspired by GIF, use color palette to create mapping. One new thing, color theme
 
 ### The compression
 - Lossless compression, need codecs for testing the speed and size.
-- Evaluation: $ M = log(5S/4) - log(C/4) - log(D) $, where $S = Size_Original / Size_Compressed$, $C = Memcpy_Speed/Compress_Speed$, $D = Memcpy_Speed/Decompress_Speed$. Higher is better.
-- Candidates: libdeflate level 6 (baseline); brotli level 5, 11; bzip3 level 5; kanzi level 1, 2; lz4hc level 4, 9; lz4 fast level 1; lzav level 1; zstd fast level 1; zstd level 3, 22.
+- Evaluation: $ M = 4 * log(S) - log(C) / 2 - log(D) $, where $S = Size_Original / Size_Compressed$, $C = Memcpy_Speed/Compress_Speed$, $D = Memcpy_Speed/Decompress_Speed$. Higher is better.
+- Candidates: libdeflate level 6 (baseline); brotli level 5, 11; bzip3 level 1, 5; kanzi level 1, 2; lz4hc level 4, 9; lz4 fast level 1; lzav level 1; zstd fast level 1; zstd level 3, 10, 22.
+- Chosen: zstd level 3 (best, default), lzav level 1 (fast), zstd level 10 (medium-high ratio), lz4 fast level 1 (fastest), brotli level 5 (high ratio), libdeflate level 6 (legacy support), brotli level 11 (extreme high ratio).
+- Eliminated: bzip3 (slow), kanzi (unstable), lz4hc (slow on compression), zstd level 22 (slow on compression).
 
 ## Implementation
 
@@ -60,3 +62,55 @@ And then as the general image to `.dif` converter.
 2. The theme-matching change.
 3. The speed of encoding and decoding, with python benchmark code. Compare with gif, png, jxl, webp, avif.
 For the existing codecs, use the existing library. Do not reinvent the wheel.
+
+## Checklist
+
+### Format & codec
+- [x] DIF core codec — `crates/dif-core/` (`codec.rs`, `format.rs`, `varint.rs`, `error.rs`)
+- [x] UTF-8 variable-length color mapping
+- [x] Grayscale mode (8/16-bit)
+- [x] Color themes / named palette
+- [x] Frame model (APNG/GIF-style)
+- [x] Format spec — `spec/dif-spec.typ`
+- [ ] Spec finalized & matches implementation (cross-check pending)
+
+### Compression study
+- [x] Codec benchmark harness — `bench/`
+- [x] Metric `M = 4*log(S) - log(C)/2 - log(D)` — `bench/metric.py`
+- [x] Per-image TSV + recursive subdir aggregation
+- [x] Candidate sweep (15 codec/level configs)
+- [x] Decision: chosen / eliminated set
+- [x] Two workloads benched — `bench-report-drawio.md` (diagrams), `bench-report-sipi.md` (photos)
+- [x] Decision re-validated across both workloads (diagram-target confirmed)
+
+### Converters
+- [x] `.drawio` → `.dif` — `dif_tools/drawio.py`
+- [x] General image → `.dif` — `dif_tools/convert.py`
+- [x] `.difr` raw (uncompressed) path
+- [x] Colorspace / themes — `dif_tools/colorspace.py`, `dif_tools/themes.py`
+- [x] Python binding — `crates/dif-py/`
+
+### Decode & display
+- [x] Wasm decoder — `crates/dif-wasm/`
+- [x] Browser respects theme — `web/`
+- [x] VS Codium extension — `extension/` (`extension.ts`, `viewer.js`)
+- [ ] Extension theme/mode live-switch verified end-to-end
+
+### Evaluation
+- [x] Speed bench vs existing codecs — `bench/compare.py`
+- [ ] Size comparison vs png / lossless jxl / webp / avif
+- [ ] Theme-matching change demo captured
+- [ ] Encode/decode speed vs gif/png/jxl/webp/avif written up
+
+### Tests
+- [x] `tests/test_codec.py`, `tests/test_convert.py`, `tests/test_bench.py`
+
+## Worklog
+
+- **2026-05-30** — Initial plan (`30588a0`).
+- **2026-05-30** — DIF format project scaffold: core codec, converters, wasm, extension, spec (`80d6f4c`).
+- **2026-05-30** — Bench: per-image TSV, recursive subdir stats, bzip3 levels, LFS attrs (`462752c`).
+- **2026-05-30** — USC-SIPI test images via git-LFS (`b7b2db4`).
+- **2026-05-31** — Metric reweighted to `4*log(S) - log(C)/2 - log(D)`; candidate list + chosen/eliminated recorded; verified against `bench-codecs.tsv`. Fixed stale formula docstring in `bench/metric.py`.
+- **2026-05-31** — Fixed report writer (`bench/__main__.py`): title/table separation + open file once outside loop (was truncating to last subdir only).
+- **2026-05-31** — Re-evaluated codec decision across diagram vs photo workloads. Confirmed metric is workload-sensitive (ratio term dominates → photos go negative, off target). Chosen set holds for the diagram target; `brotli-5` > `zstd-22` at equal ratio (≈69× faster compress); `lzav-1` / `lz4-fast1` robust across both.

@@ -23,7 +23,17 @@ from .runner import (
     subdir_stats,
 )
 
-_IMAGE_EXTS = {".png", ".gif", ".webp", ".bmp", ".jpg", ".jpeg", ".tif", ".tiff"}
+_IMAGE_EXTS = {
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".jpg",
+    ".jpeg",
+    ".tif",
+    ".tiff",
+    ".drawio",
+}
 
 
 def _images(passed: list[str]) -> list[str]:
@@ -53,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
         "--out",
         default="bench-codecs.tsv",
         help="per-image results written here as TSV (default: bench-codecs.tsv)",
+    )
+    c.add_argument(
+        "--report",
+        default="bench-report.md",
+        help="benchmark report (default: bench-report.md)",
     )
     f = sub.add_parser("formats", help="compare DIF vs other image formats")
     f.add_argument("images", nargs="*")
@@ -86,14 +101,21 @@ def main(argv: list[str] | None = None) -> int:
         print("# C,D measured against each image's memcpy baseline\n")
 
         # Aggregate per directory, recursively (markdown tables).
-        for label, stats in subdir_stats(reports):
-            print(f"### {label}/  (M aggregated over images beneath)")
-            print(format_stats_table(stats))
-            print()
+        with open(args.report, "w", newline="") as rp:
+            for label, stats in subdir_stats(reports):
+                title = f"### {label}/  (M aggregated over images beneath)"
+                table = format_stats_table(stats)
+                print(title)
+                print(table)
+                print()
+                rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
-        for p in imgs:
-            print(compare_table(p, compare_image(p, args.repeats)))
-            print()
+        with open(args.report, "w", newline="") as rp:
+            for p in imgs:
+                table = compare_table(p, compare_image(p, args.repeats))
+                print(table)
+                print()
+                rp.write(f"{table}\n\n")
     return 0
 
 

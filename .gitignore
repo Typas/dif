@@ -28,6 +28,7 @@ spec/*.pdf
 
 # Benchmark output / built native shims
 bench-codecs.tsv
+bench-codecs-*.tsv
 bench/results/
 bench/_native/
 crates/kanzi-shim/vendor/

@@ -118,7 +118,7 @@ except ImportError:  # pragma: no cover
 try:
     import pyzstd as _pyzstd
 
-    for _label, _lvl in (("zstd-fast1", -1), ("zstd-3", 3), ("zstd-22", 22)):
+    for _label, _lvl in (("zstd-fast1", -1), ("zstd-3", 3), ("zstd-10", 10), ("zstd-22", 22)):
         _add(
             Codec(
                 _label,

@@ -60,36 +60,58 @@ class DirStat:
 
 
 def bench_image(path: str, raw: bytes, repeats: int = 5) -> ImageReport:
+    codec_w = 12
+    ratio_w = 7
+    speed_w = 14
+    score_w = 7
+    MB: int = 1048576
+    print(
+        f"| {'codec':^{codec_w}} | {'S ratio':^{ratio_w}} | {'C speed (Mbps)':^{speed_w}} | {'D speed (Mbps)':^{speed_w}} | {'M score':^{score_w}} |"
+    )
+    print(
+        f"|{'-' * (codec_w + 2)}|{'-' * (ratio_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (score_w + 2)}|"
+    )
     mem = memcpy_speed(raw, repeats)
+    print(
+        f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} |"
+    )
     results: list[CodecResult] = []
     for codec in all_codecs():
         if not codec.available:
+            print(f"-- WARN: {codec.name} is not available, skipped")
             results.append(
                 CodecResult(codec.name, 0, 0, 0, 0, 0, float("-inf"), False, codec.note)
             )
             continue
         try:
-            comp = codec.compress(raw)
-            if codec.decompress(comp, len(raw)) != raw:
+            # The codec normally won't fail, don't try every time.
+            csp, comp = speed(lambda: codec.compress(raw), len(raw), repeats)
+            dsp, decomp = speed(
+                lambda: codec.decompress(comp, len(raw)), len(raw), repeats
+            )
+            if decomp != raw:
                 raise ValueError("roundtrip mismatch")
-            csp = speed(lambda: codec.compress(raw), len(raw), repeats)
-            dsp = speed(lambda: codec.decompress(comp, len(raw)), len(raw), repeats)
             s = len(raw) / len(comp)
             c, d = mem / csp, mem / dsp
+            m = compute_m(s, c, d)
+            print(
+                f"| {codec.name:^{codec_w}} | {s:>{ratio_w}.1f} | {csp / MB:>{speed_w}.1f} | {dsp / MB:>{speed_w}.1f} | {m:>{score_w}.1f} |"
+            )
             results.append(
                 CodecResult(
                     codec.name,
                     s,
-                    csp / 1e6,
-                    dsp / 1e6,
+                    csp / MB,
+                    dsp / MB,
                     c,
                     d,
-                    compute_m(s, c, d),
+                    m,
                     True,
                     codec.note,
                 )
             )
         except Exception:  # noqa: BLE001
+            print(f"-- ERROR: {codec.name} has roundtrip failed, skipped")
             results.append(
                 CodecResult(
                     codec.name, 0, 0, 0, 0, 0, float("-inf"), False, "roundtrip failed"
@@ -103,7 +125,9 @@ def run(
     paths: Sequence[str | Path], strategy: str = "arithmetic", repeats: int = 5
 ) -> list[ImageReport]:
     reports: list[ImageReport] = []
-    for p in paths:
+    count = len(paths)
+    for i, p in enumerate(paths):
+        print(f"Benchmarking {p} ({i + 1}/{count}):")
         raw = image_to_dif_image(p, strategy=strategy).to_difr()
         reports.append(bench_image(str(p), raw, repeats))
     return reports
