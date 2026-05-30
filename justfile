@@ -51,6 +51,11 @@ py:
 wasm:
     wasm-pack build crates/dif-wasm --target web --out-dir "$PWD/web/pkg"
 
+# Re-emit the committed demo asset for the current .dif format (run `just py`
+# first so the `dif` module exists). Needed after a container format bump.
+regen-demo:
+    uv run python web/regen_flowchart.py
+
 # --- drawio rendering (local container) ------------------------------------
 # rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
 # run one-shot per file. Fully local, no diagrams.net. dif_tools.drawio drives
