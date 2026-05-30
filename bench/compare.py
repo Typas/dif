@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import dif
 import imagecodecs
@@ -20,6 +21,19 @@ from PIL import Image as PILImage
 from dif_tools import image_to_dif_image, load_image
 
 from .metric import speed
+
+# The study's 7 codec variants (plan.md). `DIF_BASELINE` is the `rel` reference
+# column — every other format's size is reported relative to it.
+DIF_CODECS: tuple[str, ...] = (
+    "zstd-3",
+    "zstd-10",
+    "brotli-5",
+    "brotli-11",
+    "libdeflate-6",
+    "lz4-fast1",
+    "lzav-1",
+)
+DIF_BASELINE = "zstd-3"
 
 
 @dataclass
@@ -69,23 +83,30 @@ def _measure(
         return FormatResult(name, 0, 0, 0, False, note=type(exc).__name__)
 
 
-def compare_image(path: str | Path, repeats: int = 3) -> list[FormatResult]:
+def compare_image(
+    path: str | Path,
+    repeats: int = 3,
+    dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
+) -> list[FormatResult]:
     arr, is_gray = _load(path)
     rgb = _as_rgb(arr, is_gray)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
 
     img = image_to_dif_image(path, "arithmetic")
-    rows.append(
-        _measure(
-            "dif",
-            lambda: img.to_dif("brotli"),
-            lambda b: dif.Image.from_dif(b).render("light", 0)[2],
-            None,  # DIF losslessness is verified in tests/test_convert.py
-            nbytes,
-            repeats,
+    for codec in dif_codecs:
+        rows.append(
+            _measure(
+                f"dif-{codec}",
+                # default arg binds `codec` per iteration (avoids late binding);
+                # `codec` is a runtime str, narrow to the typed alias.
+                lambda c=codec: img.to_dif(cast("dif.CodecName", c)),
+                lambda b: dif.Image.from_dif(b).render("light", 0)[2],
+                None,  # DIF losslessness is verified in tests/test_convert.py
+                nbytes,
+                repeats,
+            )
         )
-    )
 
     rows.append(
         _measure(
@@ -147,16 +168,23 @@ def compare_image(path: str | Path, repeats: int = 3) -> list[FormatResult]:
 
 
 def format_table(path: str | Path, rows: list[FormatResult]) -> str:
-    head = f"{'format':<10}{'size':>10}{'enc MB/s':>10}{'dec MB/s':>10}{'rel':>7}  note"
+    head = f"{'format':<16}{'size':>10}{'enc MB/s':>10}{'dec MB/s':>10}{'rel':>7}  note"
     lines = [f"# {Path(path).name}", head, "-" * len(head)]
-    dif_size = next((r.size for r in rows if r.name == "dif" and r.available), None)
+    # `rel` is measured against the baseline DIF variant; fall back to the first
+    # available dif-* row if the baseline wasn't part of this run.
+    baseline = f"dif-{DIF_BASELINE}"
+    dif_size = next((r.size for r in rows if r.name == baseline and r.available), None)
+    if dif_size is None:
+        dif_size = next(
+            (r.size for r in rows if r.name.startswith("dif-") and r.available), None
+        )
     for r in rows:
         if not r.available:
-            lines.append(f"{r.name:<10}{'n/a':>10}{'':>10}{'':>10}{'':>7}  {r.note}")
+            lines.append(f"{r.name:<16}{'n/a':>10}{'':>10}{'':>10}{'':>7}  {r.note}")
             continue
         rel = f"x{r.size / dif_size:.2f}" if dif_size else ""
         tag = "" if r.lossless else "LOSSY"
         lines.append(
-            f"{r.name:<10}{r.size:>10}{r.enc_mbps:>10.1f}{r.dec_mbps:>10.1f}{rel:>7}  {tag}"
+            f"{r.name:<16}{r.size:>10}{r.enc_mbps:>10.1f}{r.dec_mbps:>10.1f}{rel:>7}  {tag}"
         )
     return "\n".join(lines)

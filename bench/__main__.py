@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import native
-from .compare import compare_image
+from .compare import DIF_CODECS, compare_image
 from .compare import format_table as compare_table
 from .runner import (
     TSV_HEADER,
@@ -73,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("images", nargs="*")
     f.add_argument("--repeats", type=int, default=3)
     f.add_argument(
+        "--dif-codecs",
+        nargs="+",
+        choices=DIF_CODECS,
+        default=list(DIF_CODECS),
+        metavar="VARIANT",
+        help="DIF codec variants to compare (default: all 7)",
+    )
+    f.add_argument(
         "--report",
         default="bench-formats.md",
         help="comparison report (default: bench-formats.md)",
@@ -117,7 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "formats":
         with open(args.report, "w", newline="") as rp:
             for p in imgs:
-                table = compare_table(p, compare_image(p, args.repeats))
+                table = compare_table(
+                    p, compare_image(p, args.repeats, args.dif_codecs)
+                )
                 print(table)
                 print()
                 rp.write(f"{table}\n\n")
