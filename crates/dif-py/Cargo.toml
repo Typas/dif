@@ -13,3 +13,10 @@ crate-type = ["cdylib"]
 # `native` adds the zstd + liblzma codecs (Python is a native build, not wasm).
 dif-core = { path = "../dif-core", features = ["native"] }
 pyo3 = { version = "0.24", features = ["extension-module"] }
+
+# Optimized build that keeps debug info. `just py` uses this so benchmark
+# numbers reflect real codec speed (plain `dev` is unoptimized and ~10-50x
+# slower, which makes `bench formats` DIF timings meaningless).
+[profile.dev-release]
+inherits = "release"
+debug = true

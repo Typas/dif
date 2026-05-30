@@ -43,8 +43,9 @@ clippy:
 # --- Bindings (excluded from the cargo workspace) -------------------------
 
 # Build the Python extension into the uv 3.12 env.
+# `dev-release` = optimized + debug info, so benchmark timings are realistic.
 py:
-    uv run maturin develop -m crates/dif-py/Cargo.toml
+    uv run maturin develop --profile dev-release -m crates/dif-py/Cargo.toml
 
 # Build the wasm decoder into web/pkg.
 wasm:

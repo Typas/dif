@@ -63,8 +63,9 @@ fn compress(codec: CodecId, data: &[u8]) -> Result<Vec<u8>> {
 fn decompress(codec: CodecId, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     match codec {
         CodecId::Store => Ok(data.to_vec()),
-        CodecId::Deflate => miniz_oxide::inflate::decompress_to_vec(data)
-            .map_err(|_| DifError::CompressionFailed),
+        CodecId::Deflate => {
+            miniz_oxide::inflate::decompress_to_vec(data).map_err(|_| DifError::CompressionFailed)
+        }
         CodecId::Brotli => brotli_decompress(data, raw_len),
         CodecId::Xz => xz_decompress(data, raw_len),
         CodecId::Zstd => zstd_decompress(data, raw_len),
@@ -161,20 +162,24 @@ fn zstd_compress(data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(feature = "native")]
 fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     let mut out = vec![0u8; raw_len];
-    let n = zstd_safe::decompress(out.as_mut_slice(), data)
-        .map_err(|_| DifError::CompressionFailed)?;
+    let n =
+        zstd_safe::decompress(out.as_mut_slice(), data).map_err(|_| DifError::CompressionFailed)?;
     out.truncate(n);
     Ok(out)
 }
 
 #[cfg(not(feature = "native"))]
 fn zstd_compress(_data: &[u8]) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("zstd codec requires the `native` feature"))
+    Err(DifError::Invalid(
+        "zstd codec requires the `native` feature",
+    ))
 }
 
 #[cfg(not(feature = "native"))]
 fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("zstd codec requires the `native` feature"))
+    Err(DifError::Invalid(
+        "zstd codec requires the `native` feature",
+    ))
 }
 
 /// Serialize and compress an image into a `.dif` container.
@@ -228,8 +233,14 @@ mod tests {
             height: 4,
             depth: SampleDepth::Eight,
             themes: vec![
-                Theme { tag: ModeTag::Light, name: "light".into() },
-                Theme { tag: ModeTag::Dark, name: "dark".into() },
+                Theme {
+                    tag: ModeTag::Light,
+                    name: "light".into(),
+                },
+                Theme {
+                    tag: ModeTag::Dark,
+                    name: "dark".into(),
+                },
             ],
             content: Content::Indexed {
                 palettes: vec![light, dark],
@@ -277,7 +288,10 @@ mod tests {
             width: 64,
             height: 64,
             depth: SampleDepth::Eight,
-            themes: vec![Theme { tag: ModeTag::Light, name: "l".into() }],
+            themes: vec![Theme {
+                tag: ModeTag::Light,
+                name: "l".into(),
+            }],
             content: Content::Indexed {
                 palettes: vec![pal],
                 frames: vec![frame],

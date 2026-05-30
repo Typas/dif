@@ -41,10 +41,24 @@ def load_image(path: str | Path) -> tuple[np.ndarray, bool, int]:
     return rgba, False, 8
 
 
+# Rendered-PNG cache for ``.drawio`` inputs (gitignored; never /tmp).
+_DRAWIO_PNG_CACHE = Path(__file__).resolve().parent.parent / "out" / "drawio-png"
+
+
 def image_to_dif_image(path: str | Path, strategy: str = "arithmetic") -> "dif.Image":
-    """Build a :class:`dif.Image` from an image file."""
+    """Build a :class:`dif.Image` from an image (or ``.drawio``) file.
+
+    A ``.drawio`` input is first rendered to a PNG under ``out/drawio-png/``
+    (keeping ``testdata/`` clean) and then loaded like any raster image.
+    """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
+    path = Path(path)
+    if path.suffix.lower() == ".drawio":
+        from .drawio import render_drawio_to_png
+
+        png = _DRAWIO_PNG_CACHE / (path.stem + ".png")
+        path = Path(render_drawio_to_png(path, png))
     arr, is_gray, depth_bits = load_image(path)
     max_value = (1 << depth_bits) - 1
 
@@ -85,14 +99,9 @@ def convert_file(
 ) -> bytes:
     """Convert an image to ``.dif`` (or ``.difr`` if ``raw``); returns the bytes.
 
-    A ``.drawio`` input is first rendered to PNG (requires drawio-desktop).
+    A ``.drawio`` input is rendered to PNG first (handled by
+    :func:`image_to_dif_image`).
     """
-    input_path = Path(input_path)
-    if input_path.suffix.lower() == ".drawio":
-        from .drawio import render_drawio_to_png
-
-        input_path = Path(render_drawio_to_png(input_path))
-
     img = image_to_dif_image(input_path, strategy=strategy)
     data = img.to_difr() if raw else img.to_dif(codec)
     if output_path is not None:

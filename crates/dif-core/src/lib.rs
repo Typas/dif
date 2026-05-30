@@ -182,10 +182,7 @@ impl DifImage {
                 if frames.iter().any(|f| f.len() != px) {
                     return Err(DifError::Invalid("frame size != width*height"));
                 }
-                if frames
-                    .iter()
-                    .any(|f| f.iter().any(|&i| i as usize >= cc))
-                {
+                if frames.iter().any(|f| f.iter().any(|&i| i as usize >= cc)) {
                     return Err(DifError::Invalid("palette index out of range"));
                 }
             }

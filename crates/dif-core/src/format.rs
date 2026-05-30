@@ -269,8 +269,14 @@ mod tests {
             height: 2,
             depth: SampleDepth::Eight,
             themes: vec![
-                Theme { tag: ModeTag::Light, name: "light".into() },
-                Theme { tag: ModeTag::Dark, name: "dark".into() },
+                Theme {
+                    tag: ModeTag::Light,
+                    name: "light".into(),
+                },
+                Theme {
+                    tag: ModeTag::Dark,
+                    name: "dark".into(),
+                },
             ],
             content: Content::Indexed {
                 palettes: vec![light, dark],
@@ -289,8 +295,14 @@ mod tests {
             height: 2,
             depth: SampleDepth::Eight,
             themes: vec![
-                Theme { tag: ModeTag::Light, name: "light".into() },
-                Theme { tag: ModeTag::Dark, name: "dark".into() },
+                Theme {
+                    tag: ModeTag::Light,
+                    name: "light".into(),
+                },
+                Theme {
+                    tag: ModeTag::Dark,
+                    name: "dark".into(),
+                },
             ],
             content: Content::Grayscale {
                 luts: vec![identity, inverted],
