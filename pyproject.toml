@@ -22,6 +22,9 @@ dev = [
     "black>=24",
     "ruff>=0.6",
     "ty>=0.0.1a1",
+    # Cross-compile the wasm decoder's C codec deps (lzav, zstd) via zig cc.
+    # Pulls `ziglang` (the zig binary wheel) automatically, so no system zig.
+    "cargo-zigbuild>=0.21",
 ]
 
 # Virtual project: deps only, nothing to build here. The `dif` extension is
