@@ -62,8 +62,8 @@ def _measure(
         blob = enc()
         decoded = dec(blob)
         lossless = True if expected is None else _equal(decoded, expected)
-        e = speed(enc, nbytes, repeats)
-        d = speed(lambda: dec(blob), nbytes, repeats)
+        e, _ = speed(enc, nbytes, repeats)
+        d, _ = speed(lambda: dec(blob), nbytes, repeats)
         return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless)
     except Exception as exc:  # noqa: BLE001
         return FormatResult(name, 0, 0, 0, False, note=type(exc).__name__)

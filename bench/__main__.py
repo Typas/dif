@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     f = sub.add_parser("formats", help="compare DIF vs other image formats")
     f.add_argument("images", nargs="*")
     f.add_argument("--repeats", type=int, default=3)
+    f.add_argument(
+        "--report",
+        default="bench-formats.md",
+        help="comparison report (default: bench-formats.md)",
+    )
     args = ap.parse_args(argv)
 
     if args.cmd == "setup":
