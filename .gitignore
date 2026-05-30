@@ -1,0 +1,33 @@
+# Rust
+/target
+**/target
+Cargo.lock
+
+# Python / uv
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node / wasm
+node_modules/
+crates/dif-wasm/pkg/
+web/pkg/
+extension/media/pkg/
+extension/out/
+extension/*.vsix
+
+# Generated artifacts
+spec/*.pdf
+*.dif
+*.difr
+!testdata/**/*.dif
+!testdata/**/*.difr
+!web/*.dif
+
+# Benchmark output / built native shims
+bench/results/
+bench/_native/
+crates/kanzi-shim/vendor/
+crates/kanzi-shim/Cargo.lock

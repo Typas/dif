@@ -1,0 +1,31 @@
+{
+  "name": "dif-viewer",
+  "displayName": "DIF Viewer",
+  "description": "Theme-aware viewer for .dif (Diagram Image Format) files.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "adsp-final",
+  "engines": { "vscode": "^1.84.0" },
+  "categories": ["Visualization"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "dif.preview",
+        "displayName": "DIF Image",
+        "selector": [{ "filenamePattern": "*.dif" }, { "filenamePattern": "*.difr" }],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build ../crates/dif-wasm --target web --out-dir \"$PWD/media/pkg\"",
+    "compile": "tsc -p ./",
+    "build": "npm run build:wasm && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.84.0",
+    "typescript": "^5.4.0"
+  }
+}

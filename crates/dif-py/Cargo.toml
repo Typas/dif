@@ -1,0 +1,15 @@
+[package]
+name = "dif-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Python bindings for the DIF codec (built with maturin)."
+
+[lib]
+name = "dif"
+crate-type = ["cdylib"]
+
+[dependencies]
+# `native` adds the zstd + liblzma codecs (Python is a native build, not wasm).
+dif-core = { path = "../dif-core", features = ["native"] }
+pyo3 = { version = "0.24", features = ["extension-module"] }

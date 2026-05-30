@@ -1,0 +1,44 @@
+[project]
+name = "dif-tools"
+version = "0.1.0"
+description = "Converters, tests, and benchmarks for the DIF (Diagram Image Format)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2",
+    "pillow>=11",
+    "imagecodecs>=2024.6.1",
+    "zstandard>=0.23",
+    "brotli>=1.1",
+    "lz4>=4.3",
+    "deflate>=0.8.1",
+    "bzip3>=0.1.9",
+    "pyzstd>=0.19.1",
+]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.7",
+    "pytest>=8",
+    "black>=24",
+    "ruff>=0.6",
+    "ty>=0.0.1a1",
+]
+
+# Virtual project: deps only, nothing to build here. The `dif` extension is
+# built separately with `uv run maturin develop -m crates/dif-py/Cargo.toml`.
+[tool.uv]
+package = false
+
+[tool.black]
+target-version = ["py312"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ty.environment]
+# Hand-written stub for the compiled `dif` extension module.
+extra-paths = ["typings"]

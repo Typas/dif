@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/dif-core"]
+# dif-py (PyO3) and dif-wasm (wasm-bindgen) are built by their own toolchains
+# (maturin / wasm-pack), not by `cargo test`, so they're excluded here. They
+# still consume dif-core via a path dependency.
+exclude = ["crates/dif-py", "crates/dif-wasm", "crates/kanzi-shim"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+dif-core = { path = "crates/dif-core" }

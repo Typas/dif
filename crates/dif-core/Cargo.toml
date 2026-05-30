@@ -1,0 +1,27 @@
+[package]
+name = "dif-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core codec for the DIF (Diagram Image Format): theme-aware, lossless, palette/grayscale."
+
+[dependencies]
+# Pure-Rust, no_std + alloc compression so the core compiles to wasm / embedded
+# targets with no native dependencies.
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+lzma-rust2 = { version = "0.16", default-features = false, features = ["xz", "encoder"] }
+
+# Brotli needs std (its streaming Reader/Writer API); gated behind the `std` feature.
+brotli = { version = "8", optional = true }
+
+# Native (C-linked) codecs; imply std and are off in no_std / wasm builds.
+zstd-safe = { version = "7.2", optional = true }
+xz2 = { version = "0.1", optional = true }
+
+[features]
+# Default is no_std + alloc: store / deflate / xz, the pure-Rust portable core.
+default = []
+# `std` unlocks the Brotli codec (id 2). Enable it for the full pure-Rust set.
+std = ["dep:brotli"]
+# Adds zstd and a faster liblzma-backed XZ encoder; implies std (non-wasm builds).
+native = ["std", "dep:zstd-safe", "dep:xz2"]
