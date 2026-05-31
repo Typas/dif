@@ -141,9 +141,23 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
     `bench/compare.py` calls it directly. `_to_palette` removed with the old path.
   - `dif.Image.indexed(...)`/`grayscale(...)` list constructors **kept** — only
     `tests/test_codec.py` uses them; the `*_from_*` helpers are the converter paths.
-- [ ] Size comparison vs png / lossless jxl / webp / avif
+- [x] Multithreaded `.dif` encode (zstd `NbWorkers` / brotli `compress_multi`,
+  both live via the `native` feature) **roundtrip-verified** — `bench codecs
+  --numthreads N` adds rust `dif-{codec}` / `dif-{codec}-mt` rows that encode
+  the real `.dif` container and decode back, so the existing `decomp != raw`
+  check covers the mt path (`bench formats` `-mt` rows never checked it: their
+  dif rows pass `expected=None`, hardcoding lossless). Confirmed: zstd barely
+  splits at diagram body sizes (≈0 size delta); brotli's meta-block split moves
+  ratio a little either way; all rows `ok=1`.
+- [x] Size comparison vs png / lossless jxl / webp / avif — `docs/bench-formats-mt.md`
+  (per-dir aggregate, `rel` vs png). Diagrams: webp-ll smallest (x0.32), `.dif`
+  brotli-11 x0.47, gif x0.47 but `LOSSY`. Photos: jxl-ll x0.76, `.dif` weaker
+  (ratio term dominates — same workload finding as the codec study).
 - [ ] Theme-matching change demo captured
-- [ ] Encode/decode speed vs gif/png/jxl/webp/avif written up
+- [x] Encode/decode speed vs gif/png/jxl/webp/avif — same report
+  (`docs/bench-formats-mt.md`), enc/dec MB/s columns. `.dif` decode 850–1200
+  MB/s (zstd/lz4/lzav), encode 350–600 MB/s at the fast levels (faster than png);
+  brotli-11 the lone slow encoder. jxl/avif an order slower to decode.
 
 ### Tests
 - [x] `tests/test_codec.py`, `tests/test_convert.py`, `tests/test_bench.py`
@@ -166,3 +180,4 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Killed the bottleneck by moving pixel work to Rust: new `dif_core::indexed_from_rgba8` (`std`-gated `HashMap<u32,u32>` dedup in one pass) + `dif.Image.indexed_from_rgba8` / `palette()` / `add_indexed_theme()`. `dif_image_from_array` now passes the raw RGBA8 buffer to native code (parity with `png_encode(arr)`); the dark theme is derived in Python from the small light palette and appended. Encode **4.8 → ~410 MB/s** (zstd-3/lz4/lzav) — faster than png; codec ranking clean (brotli-11 alone slow at 7.5 MB/s). Grayscale path still uses `.tolist()`; logged refactor TODOs in the checklist.
 - **2026-05-31** — Closed the refactor TODOs. (1) **Native grayscale** `dif_core::grayscale_from_samples` (alloc-only, LE-u16) + `dif.Image.grayscale_from_samples`; Python hands the raw sample buffer, no `.tolist()` — gray encode off the ~5 MB/s floor to ~500 MB/s single-theme. (2) **Dark-theme OKLCh derivation ported to Rust** (`crates/dif-core/src/derive.rs`) using the **`palette` 0.7.6** crate (f64, so it reproduces the numpy reference — invert exact, arithmetic within the pinned thresholds). New `derive` feature (`= std + palette`) folded into `native`; **excluded from `wasm-native`** so the browser decoder pulls no `palette` (verified via `cargo tree`). Converter now calls `Image.add_dark_theme(strategy)` (derives + appends entirely native — no palette/LUT crosses PyO3); `themes.py` `derive_palette`/`derive_lut` became thin wrappers over module fns `dif.derive_dark_palette`/`derive_dark_lut`, and `colorspace.py` was deleted (single source of truth in Rust). 2-theme encode **~210 → ~418 MB/s** (parity with single-theme ~472, still > png). (3) Deduped `_load`  <!-- early-out below pushed 2-theme higher --> — `load_image` returns the natural dtype (gray-8 → uint8), `bench/compare.py` uses it directly; `_to_palette` gone. `indexed`/`grayscale` list ctors kept for `test_codec.py`. Verified: `cargo test --features native` (20, +5 derive), `clippy --all-features` clean, `pytest` 34 green.
 - **2026-05-31** — Dark-derive gamut **early-out**: skip the 25-iter OKLCh chroma search when the color already fits sRGB (every gray/achromatic color + most tone-compressed ones). Output byte-identical (the in-gamut branch already converged to `k=1`); removed the two dead binding methods `Image.palette`/`add_indexed_theme` (+ stub). 2-theme encode: **grayscale 142 → ~464 MB/s** (256-entry LUT is all in-gamut, search fully skipped), **diagram 417 → ~459** (vs ~481 single-theme). Confirmed the observation that 2-theme size-diff and speed-diff both scale with palette size N (extra stored palette ∝ N, derivation cost ∝ N).
+- **2026-05-31** — Closed an **unverified mt path**. `bench formats` drives the rust multithreaded encode (`to_dif_workers` → zstd `NbWorkers` / brotli `compress_multi`) for its `-mt` rows but never checks the decode matches the input — every dif row passes `expected=None`, so `lossless` is hardcoded `True`. `bench codecs` has the roundtrip check (`decomp != raw`) but had no mt. Added `bench.codecs.dif_codecs(numthreads)`: rust-`dif`-backed codecs that compress the `.difr` body through the real `.dif` container and decode back, so the mt encode path is exercised **and** roundtrip-verified by the existing check. Empty unless `--numthreads > 1` (default run unchanged); each codec yields a single-thread reference (`dif-{c}`) + worker variant (`dif-{c}-mt`) so the worker size delta shows side by side. Verified one image per dir (tiff + drawio, `--numthreads 4`): all `dif-*`/`-mt` rows `ok=1`; zstd delta ≈0 (body too small to split), brotli moves a little either way — matches the `codec.rs` comments. Moved `plan.md` + `plan-format-codecs.md` to `docs/`; `*.tsv` now tracked via git-LFS.
