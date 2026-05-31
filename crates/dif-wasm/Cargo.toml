@@ -9,9 +9,12 @@ description = "WebAssembly decoder for DIF; reuses dif-core, picks the theme by 
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# `std` keeps the Brotli codec (the production default) decodable in the browser.
-dif-core = { path = "../dif-core", features = ["std"] }
-wasm-bindgen = "0.2"
+# `wasm-native` brings the C codecs (zstd id 4 + lzav id 6) into the browser
+# decoder via zig cross-compile, on top of the pure-Rust store/deflate/brotli/lz4.
+# So `just wasm` must build with `cargo zigbuild` (see the justfile).
+dif-core = { path = "../dif-core", features = ["wasm-native"] }
+# Pinned so `wasm-bindgen-cli` (installed by `just wasm-setup`) matches exactly.
+wasm-bindgen = "=0.2.122"
 
 [profile.release]
 opt-level = "z"

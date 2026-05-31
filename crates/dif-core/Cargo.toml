@@ -28,5 +28,11 @@ lzav-shim = { path = "../lzav-shim", optional = true }
 default = []
 # `std` unlocks the Brotli codec (id 2). Enable it for the full pure-Rust set.
 std = ["dep:brotli"]
-# Adds zstd, a libdeflate encoder, and the lzav C shim; implies std (non-wasm builds).
-native = ["std", "dep:zstd-safe", "dep:libdeflater", "dep:lzav-shim"]
+# Shared C codec set (zstd id 4 + lzav id 6). Linked natively on the host and
+# cross-compiled to wasm via zig for the browser decoder (see `wasm-native`).
+c-codecs = ["std", "dep:zstd-safe", "dep:lzav-shim"]
+# Native host build: the C codecs plus the libdeflate DEFLATE encoder.
+native = ["c-codecs", "dep:libdeflater"]
+# wasm decoder with the C codecs cross-compiled (decode-only, so no libdeflate
+# encoder). Build with `cargo zigbuild` so the C deps compile to wasm.
+wasm-native = ["c-codecs"]

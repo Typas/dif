@@ -33,6 +33,12 @@
       <button id="toggle">Override theme</button>
       <span id="info"></span>
     </div>
+    <!-- The wasm decoder is built for wasm32-wasip1 (so the C codecs zstd/lzav
+         get wasi-libc's malloc). Resolve its wasi import to a no-op shim — the
+         codecs do no I/O, so nothing here is called on the decode path. -->
+    <script type="importmap">
+      { "imports": { "wasi_snapshot_preview1": "./wasi_shim.js" } }
+    </script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

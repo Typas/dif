@@ -26,9 +26,10 @@ const MAGIC_DIF: [u8; 4] = *b"DIF1";
 /// Compression algorithm used for a `.dif` body.
 ///
 /// `Store`/`Deflate`/`Lz4` are pure-Rust and decode in the default no_std build.
-/// `Brotli` requires the `std` feature; `Zstd` and `Lzav` require `native`
-/// (C-linked `zstd-safe` / the `lzav-shim` C shim) and are unavailable in a
-/// no_std build. Byte 3 is reserved (formerly `Xz`, removed) and rejected.
+/// `Brotli` requires the `std` feature; `Zstd` and `Lzav` require a C-codec
+/// feature (`native` on the host, or `wasm-native` for the zig-cross wasm
+/// decoder) and are unavailable in a plain no_std build. Byte 3 is reserved
+/// (formerly `Xz`, removed) and rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CodecId {
@@ -113,26 +114,26 @@ fn deflate_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-// --- Lzav: native-only C shim. `lzav-1` is the single wired level. ---
+// --- Lzav: C shim (native or zig-cross wasm). `lzav-1` is the single level. ---
 
-#[cfg(feature = "native")]
+#[cfg(feature = "c-codecs")]
 fn lzav_compress(data: &[u8]) -> Result<Vec<u8>> {
     lzav_shim::compress(data).ok_or(DifError::CompressionFailed)
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "c-codecs")]
 fn lzav_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     lzav_shim::decompress(data, raw_len).ok_or(DifError::CompressionFailed)
 }
 
-#[cfg(not(feature = "native"))]
+#[cfg(not(feature = "c-codecs"))]
 fn lzav_compress(_data: &[u8]) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("lzav codec requires the `native` feature"))
+    Err(DifError::Invalid("lzav codec requires a C-codec feature"))
 }
 
-#[cfg(not(feature = "native"))]
+#[cfg(not(feature = "c-codecs"))]
 fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("lzav codec requires the `native` feature"))
+    Err(DifError::Invalid("lzav codec requires a C-codec feature"))
 }
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
@@ -168,9 +169,9 @@ fn brotli_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("brotli codec requires the `std` feature"))
 }
 
-// --- Zstd: only with the `native` feature (zstd-safe links C zstd) ---
+// --- Zstd: with the C-codec feature set (zstd-safe links C zstd) ---
 
-#[cfg(feature = "native")]
+#[cfg(feature = "c-codecs")]
 fn zstd_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
     let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
     let n = zstd_safe::compress(out.as_mut_slice(), data, level as i32)
@@ -179,7 +180,7 @@ fn zstd_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "c-codecs")]
 fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     let mut out = vec![0u8; raw_len];
     let n =
@@ -188,18 +189,14 @@ fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-#[cfg(not(feature = "native"))]
+#[cfg(not(feature = "c-codecs"))]
 fn zstd_compress(_data: &[u8], _level: u8) -> Result<Vec<u8>> {
-    Err(DifError::Invalid(
-        "zstd codec requires the `native` feature",
-    ))
+    Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
-#[cfg(not(feature = "native"))]
+#[cfg(not(feature = "c-codecs"))]
 fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
-    Err(DifError::Invalid(
-        "zstd codec requires the `native` feature",
-    ))
+    Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
 /// Serialize and compress an image into a `.dif` container at codec `level`.

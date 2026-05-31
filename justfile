@@ -47,9 +47,26 @@ clippy:
 py:
     uv run maturin develop --profile dev-release -m crates/dif-py/Cargo.toml
 
-# Build the wasm decoder into web/pkg.
+# One-time wasm toolchain. Target is wasm32-wasip1 so wasi-libc provides malloc +
+# the C headers the codec deps need (zstd/lzav). `cargo-zigbuild` + `ziglang`
+# (the zig binary wheel) come from the uv dev env; `wasm-bindgen-cli` is
+# version-pinned to the wasm-bindgen crate so the JS glue matches the .wasm.
+setup-wasm:
+    rustup target add wasm32-wasip1
+    uv sync
+    cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+# Build the wasm decoder into web/pkg. The C codecs (zstd id 4, lzav id 6)
+# cross-compile through `zig cc` (cargo-zigbuild) against wasi-libc, so the
+# browser decodes all 7 variants — including the default zstd-3 — not just the
+# pure-Rust store/deflate/brotli/lz4 set. wasm-bindgen then emits the JS glue.
+# The wasip1 module needs a small wasi shim in the loader (see web/main.js).
+# Run `just setup-wasm` once first.
 wasm:
-    wasm-pack build crates/dif-wasm --target web --out-dir "$PWD/web/pkg"
+    uv run cargo-zigbuild build --release --target wasm32-wasip1 \
+        --manifest-path crates/dif-wasm/Cargo.toml
+    wasm-bindgen crates/dif-wasm/target/wasm32-wasip1/release/dif_wasm.wasm \
+        --target web --out-dir "$PWD/web/pkg"
 
 # Re-emit the committed demo asset for the current .dif format (run `just py`
 # first so the `dif` module exists). Needed after a container format bump.
