@@ -26,7 +26,7 @@ from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import speed
 
-# The study's codec variants (plan.md). `DIF_BASELINE` names the shipped default
+# The study's codec variants (docs/plan.md). `DIF_BASELINE` names the shipped default
 # codec; `REL_REF` is the `rel` reference column — every format's size is reported
 # relative to it (PNG, the universal lossless baseline). `zstd-22` is zstd's max
 # (ultra) level: slow/CPU-bound, the zstd analogue to brotli-11 for the `-mt` probe.

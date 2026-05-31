@@ -2,7 +2,7 @@
 
 Each :class:`Codec` self-detects availability at import time, so the harness
 runs with whatever is installed and reports the rest as unavailable. Candidates
-follow the project spec (plan.md). ``decompress`` receives the original length
+follow the project spec (docs/plan.md). ``decompress`` receives the original length
 because some libraries (libdeflate) require the output size up front.
 """
 
