@@ -73,12 +73,19 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("images", nargs="*")
     f.add_argument("--repeats", type=int, default=3)
     f.add_argument(
+        "--numthreads",
+        type=int,
+        default=1,
+        help="codec threads (default 1 = 1-core comparison); >1 adds dif -mt rows "
+        "and scales jxl/avif and brotli (zstd barely splits)",
+    )
+    f.add_argument(
         "--dif-codecs",
         nargs="+",
         choices=DIF_CODECS,
         default=list(DIF_CODECS),
         metavar="VARIANT",
-        help="DIF codec variants to compare (default: all 7)",
+        help="DIF codec variants to compare (default: all)",
     )
     f.add_argument(
         "--out",
@@ -138,7 +145,13 @@ def main(argv: list[str] | None = None) -> int:
             count = len(imgs)
             for i, p in enumerate(imgs):
                 print(f"Benchmarking {p} ({i + 1}/{count}):")
-                rows = compare_image(p, args.repeats, args.dif_codecs, stream=True)
+                rows = compare_image(
+                    p,
+                    args.repeats,
+                    args.dif_codecs,
+                    stream=True,
+                    numthreads=args.numthreads,
+                )
                 print()
                 w.writerows(cmp.iter_rows(p, rows))
                 reports.append((p, rows))

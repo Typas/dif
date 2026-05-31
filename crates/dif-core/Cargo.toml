@@ -35,11 +35,20 @@ std = ["dep:brotli"]
 # Shared C codec set (zstd id 4 + lzav id 6). Linked natively on the host and
 # cross-compiled to wasm via zig for the browser decoder (see `wasm-native`).
 c-codecs = ["std", "dep:zstd-safe", "dep:lzav-shim"]
+# Multithreaded zstd encode (nbWorkers). Pulls pthread into libzstd, so it is
+# host-only — kept OFF the wasm-native decoder. Output is a standard zstd frame,
+# decoded by the normal single-thread path; no format/version change.
+zstd-mt = ["c-codecs", "zstd-safe/zstdmt"]
+# Multithreaded brotli encode (`compress_multi`, std::thread). Host-only (kept
+# off wasm). Emits a single standard brotli stream (parallel meta-blocks) decoded
+# by the normal path; no format change. Worth it for the slow high-quality levels.
+brotli-mt = ["std"]
 # Encode-side dark-theme derivation (OKLab via `palette`). Encode-only, so it is
 # kept off the wasm decoder build to avoid pulling `palette` into the browser.
 derive = ["std", "dep:palette"]
-# Native host build: the C codecs, libdeflate encoder, and dark-theme derivation.
-native = ["c-codecs", "dep:libdeflater", "derive"]
+# Native host build: the C codecs (incl. multithreaded zstd + brotli), libdeflate
+# encoder, and dark-theme derivation.
+native = ["c-codecs", "zstd-mt", "brotli-mt", "dep:libdeflater", "derive"]
 # wasm decoder with the C codecs cross-compiled (decode-only, so no libdeflate
 # encoder and no `derive`). Build with `cargo zigbuild` so the C deps compile to wasm.
 wasm-native = ["c-codecs"]

@@ -26,11 +26,14 @@ from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import speed
 
-# The study's 7 codec variants (plan.md). `DIF_BASELINE` is the `rel` reference
-# column — every other format's size is reported relative to it.
+# The study's codec variants (plan.md). `DIF_BASELINE` names the shipped default
+# codec; `REL_REF` is the `rel` reference column — every format's size is reported
+# relative to it (PNG, the universal lossless baseline). `zstd-22` is zstd's max
+# (ultra) level: slow/CPU-bound, the zstd analogue to brotli-11 for the `-mt` probe.
 DIF_CODECS: tuple[str, ...] = (
     "zstd-3",
     "zstd-10",
+    "zstd-22",
     "brotli-5",
     "brotli-11",
     "libdeflate-6",
@@ -38,6 +41,7 @@ DIF_CODECS: tuple[str, ...] = (
     "lzav-1",
 )
 DIF_BASELINE = "zstd-3"
+REL_REF = "png"  # `rel` column reference format
 
 
 @dataclass
@@ -86,6 +90,7 @@ def compare_image(
     repeats: int = 3,
     dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
     stream: bool = False,
+    numthreads: int = 1,
 ) -> list[FormatResult]:
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
@@ -96,7 +101,7 @@ def compare_image(
     rgb = _as_rgb(arr, is_gray)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
-    dif_size: int | None = None  # running baseline for the live `rel` column
+    ref_size: int | None = None  # running reference for the live `rel` column
 
     if stream:
         print(_HEAD)
@@ -104,27 +109,36 @@ def compare_image(
 
     def emit(name: str, enc, dec, expected):
         """Measure one format, then print its row live (mirrors bench_image)."""
-        nonlocal dif_size
+        nonlocal ref_size
         r = _measure(name, enc, dec, expected, nbytes, repeats)
-        # The single-theme baseline variant sets the running `rel` reference;
-        # the final table re-derives it via _baseline_size (prefers zstd-3).
-        if dif_size is None and r.available and name == f"dif-{DIF_BASELINE}":
-            dif_size = r.size
+        # PNG sets the running `rel` reference; the final table re-derives it via
+        # _ref_size. dif rows stream before png, so their live rel stays blank
+        # until png lands — the re-derived final/TSV/report tables are correct.
+        if ref_size is None and r.available and name == REL_REF:
+            ref_size = r.size
         rows.append(r)
         if stream:
-            print(_row_line(r, dif_size))
+            print(_row_line(r, ref_size))
 
     # DIF encode is timed *raw bitmap -> file*: the palette/index build AND the
     # dark-theme synthesis run inside the closure (parity with png_encode(arr),
     # which encodes the raw array). `arr` is already in memory, so no file I/O
     # is timed. `decode` renders one theme back to pixels (file -> bitmap).
-    def dif_enc(strategy: str, codec: str):
+    def dif_enc(strategy: str, codec: str, workers: int = 0):
         return lambda: dif_image_from_array(arr, is_gray, depth, strategy).to_dif(
-            cast("dif.CodecName", codec)
+            cast("dif.CodecName", codec), workers
         )
 
     def dif_dec(b: bytes):
         return dif.Image.from_dif(b).render("light", 0)[2]
+
+    # The `rel` reference row (REL_REF picks it by name) is emitted first so every
+    # row below has a live ratio and the table is topped by the baseline. png's
+    # name and encoder are one unit; REL_REF only selects which row rel divides by.
+    # FIXME: "emit ref first" assumes REL_REF == "png". If REL_REF moves to another
+    # row, this hardcoded-first emit no longer matches it — rows above the real ref
+    # get a stale live ratio. Drive the first-emit off REL_REF, or assert they agree.
+    emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
 
     # Headline row: the shipped default (zstd-3) carrying *both* themes
     # (light + dark) — the real `.dif` product, not directly size-comparable to
@@ -136,26 +150,46 @@ def compare_image(
     for codec in dif_codecs:
         emit(f"dif-{codec}", dif_enc("keep", codec), dif_dec, None)
 
+    # Multithreaded encode (`-mt`): same standard container, decoded single-
+    # thread, so it charts the enc-speed/size tradeoff of workers > 1. zstd
+    # (nbWorkers) and brotli (compress_multi) carry native workers; zstd barely
+    # splits at diagram sizes, but the slow brotli levels scale ~linearly.
+    if numthreads > 1:
+        for codec in dif_codecs:
+            if codec.startswith(("zstd-", "brotli-")):
+                emit(
+                    f"dif-{codec}-mt",
+                    dif_enc("keep", codec, numthreads),
+                    dif_dec,
+                    None,
+                )
+
     # avif/jxl pinned to their library's *native default* effort knob so the
     # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs
     # leaves avif speed unset -> aom runs at speed 0, ~0.3 MB/s; we pin the
-    # documented default instead.) webp keeps its own default.
-    emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
+    # documented default instead.) webp keeps its own default. (png is emitted
+    # above as the rel reference.) numthreads defaults to 1 so enc MB/s is an
+    # apples-to-apples 1-core measure (dif/png/gif are single-threaded) and a
+    # future imagecodecs `None`->auto default can't skew it; --numthreads N lifts
+    # the cap to probe jxl/avif scaling (webp lossless ignores it).
+    nt = numthreads
     emit(
         "webp-ll",
-        lambda: imagecodecs.webp_encode(rgb, lossless=True),
+        lambda: imagecodecs.webp_encode(rgb, lossless=True, numthreads=nt),
         imagecodecs.webp_decode,
         rgb,
     )
     emit(
         "jxl-ll",
-        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7),
+        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7, numthreads=nt),
         imagecodecs.jpegxl_decode,
         arr,
     )
     emit(
         "avif-ll",
-        lambda: imagecodecs.avif_encode(rgb, level=100, pixelformat="yuv444", speed=6),
+        lambda: imagecodecs.avif_encode(
+            rgb, level=100, pixelformat="yuv444", speed=6, numthreads=nt
+        ),
         imagecodecs.avif_decode,
         rgb,
     )
@@ -176,15 +210,12 @@ def compare_image(
     return rows
 
 
-def _baseline_size(rows: list[FormatResult]) -> int | None:
-    """The DIF size every other format's ``rel`` is measured against: the
-    baseline variant, else the first available ``dif-*`` row in this run."""
-    baseline = f"dif-{DIF_BASELINE}"
-    size = next((r.size for r in rows if r.name == baseline and r.available), None)
+def _ref_size(rows: list[FormatResult]) -> int | None:
+    """The size every other format's ``rel`` is measured against: ``REL_REF``
+    (PNG), else the first available row in this run."""
+    size = next((r.size for r in rows if r.name == REL_REF and r.available), None)
     if size is None:
-        size = next(
-            (r.size for r in rows if r.name.startswith("dif-") and r.available), None
-        )
+        size = next((r.size for r in rows if r.available), None)
     return size
 
 
@@ -205,13 +236,13 @@ _SEP = (
 )
 
 
-def _row_line(r: FormatResult, dif_size: int | None) -> str:
+def _row_line(r: FormatResult, ref_size: int | None) -> str:
     if not r.available:
         return (
             f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
             f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {r.note:^{_NOTE_W}} |"
         )
-    rel = f"x{r.size / dif_size:.2f}" if dif_size else ""
+    rel = f"x{r.size / ref_size:.2f}" if ref_size else ""
     tag = "" if r.lossless else "LOSSY"
     return (
         f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
@@ -221,8 +252,8 @@ def _row_line(r: FormatResult, dif_size: int | None) -> str:
 
 def format_table(path: str | Path, rows: list[FormatResult]) -> str:
     lines = [_HEAD, _SEP]
-    dif_size = _baseline_size(rows)
-    lines.extend(_row_line(r, dif_size) for r in rows)
+    ref_size = _ref_size(rows)
+    lines.extend(_row_line(r, ref_size) for r in rows)
     return "\n".join(lines)
 
 
@@ -242,9 +273,9 @@ TSV_HEADER = (
 def iter_rows(path: str | Path, rows: list[FormatResult]):
     """One flat row per (image, format) for CSV/TSV export."""
     name = Path(path).name
-    dif_size = _baseline_size(rows)
+    ref_size = _ref_size(rows)
     for r in rows:
-        rel = f"{r.size / dif_size:.4f}" if (dif_size and r.available) else ""
+        rel = f"{r.size / ref_size:.4f}" if (ref_size and r.available) else ""
         yield (
             name,
             r.name,
@@ -283,10 +314,10 @@ class FormatStat:
 def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
     by_fmt: dict[str, list[tuple[FormatResult, float | None]]] = defaultdict(list)
     for _path, rows in reports:
-        dif_size = _baseline_size(rows)
+        ref_size = _ref_size(rows)
         for r in rows:
             if r.available:
-                by_fmt[r.name].append((r, dif_size))
+                by_fmt[r.name].append((r, ref_size))
     stats: list[FormatStat] = []
     for name, items in by_fmt.items():
         rs = [r for r, _ in items]
@@ -303,8 +334,8 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
                 rs[-1].note,
             )
         )
-    # DIF baseline first, then ascending mean size (smaller = better).
-    stats.sort(key=lambda s: (not s.name.startswith("dif-"), s.size_mean))
+    # rel reference (REL_REF) first, then alphabetical by name (codecs cluster).
+    stats.sort(key=lambda s: (s.name != REL_REF, s.name))
     return stats
 
 

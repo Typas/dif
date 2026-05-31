@@ -6,7 +6,8 @@
 // `derive_dark_palette` / `derive_dark_lut` are called fully-qualified
 // (`dif_core::...`) so the same names can be exposed as module-level pyfunctions.
 use dif_core::{
-    from_dif, from_difr, grayscale_from_samples, indexed_from_rgba8, to_dif, to_difr, CodecId,
+    from_dif, from_difr, grayscale_from_samples, indexed_from_rgba8, to_dif_workers, to_difr,
+    CodecId,
     Content, DifError, DifImage, ModeTag, Rgba, SampleDepth, Strategy, Theme,
 };
 use pyo3::exceptions::PyValueError;
@@ -57,12 +58,13 @@ fn codec_id(s: &str) -> PyResult<(CodecId, u8)> {
         "brotli-11" => (CodecId::Brotli, 11),
         "zstd" | "zstd-3" => (CodecId::Zstd, 3),
         "zstd-10" => (CodecId::Zstd, 10),
+        "zstd-22" => (CodecId::Zstd, 22),
         "lz4" | "lz4-fast1" => (CodecId::Lz4, 1),
         "lzav" | "lzav-1" => (CodecId::Lzav, 1),
         _ => {
             return Err(PyValueError::new_err(
                 "codec must be one of: store, deflate/libdeflate-6, brotli-5, brotli-11, \
-                 zstd-3, zstd-10, lz4-fast1, lzav-1 \
+                 zstd-3, zstd-10, zstd-22, lz4-fast1, lzav-1 \
                  (bare family names alias the study default level)",
             ))
         }
@@ -218,11 +220,18 @@ impl Image {
 
     /// Encode to a compressed `.dif` container. `codec` is a single variant
     /// string (e.g. `"zstd-3"`, `"brotli-11"`, `"lz4-fast1"`); the level is
-    /// carried by the string, so there is no separate level argument.
-    #[pyo3(signature = (codec="zstd-3"))]
-    fn to_dif<'py>(&self, py: Python<'py>, codec: &str) -> PyResult<Bound<'py, PyBytes>> {
+    /// carried by the string, so there is no separate level argument. `workers`
+    /// > 0 runs the multithreaded zstd encoder (other codecs ignore it); the
+    /// output is a standard container, decoded identically — no format change.
+    #[pyo3(signature = (codec="zstd-3", workers=0))]
+    fn to_dif<'py>(
+        &self,
+        py: Python<'py>,
+        codec: &str,
+        workers: u32,
+    ) -> PyResult<Bound<'py, PyBytes>> {
         let (id, level) = codec_id(codec)?;
-        let bytes = to_dif(&self.inner, id, level).map_err(map_err)?;
+        let bytes = to_dif_workers(&self.inner, id, level, workers).map_err(map_err)?;
         Ok(PyBytes::new(py, &bytes))
     }
 

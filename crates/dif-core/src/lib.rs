@@ -36,7 +36,7 @@ pub mod error;
 pub mod format;
 pub mod varint;
 
-pub use codec::{from_dif, to_dif, CodecId};
+pub use codec::{from_dif, to_dif, to_dif_workers, CodecId};
 #[cfg(feature = "derive")]
 pub use derive::{derive_dark_lut, derive_dark_palette, Strategy};
 pub use error::{DifError, Result};
@@ -213,28 +213,38 @@ impl DifImage {
     pub fn render_rgba8(&self, prefer: ModeTag, frame: usize) -> Result<Vec<u8>> {
         let t = self.theme_for(prefer);
         let px = self.pixels_per_frame();
-        let mut out = Vec::with_capacity(px * 4);
         let scale = |v: u16| -> u8 {
             match self.depth {
                 SampleDepth::Eight => v as u8,
                 SampleDepth::Sixteen => (v >> 8) as u8,
             }
         };
+        // Bake depth-scaling into a small RGBA8 lookup table once (palette/lut
+        // size, cache-resident), so the per-pixel loop is a branch-free copy.
+        let mut out = alloc::vec![0u8; px * 4];
         match &self.content {
             Content::Indexed { palettes, frames } => {
                 let pal = &palettes[t];
                 let f = frames.get(frame).ok_or(DifError::Invalid("frame index"))?;
-                for &idx in f {
-                    let c = pal[idx as usize];
-                    out.extend_from_slice(&[scale(c.r), scale(c.g), scale(c.b), scale(c.a)]);
+                let lut: Vec<[u8; 4]> = pal
+                    .iter()
+                    .map(|c| [scale(c.r), scale(c.g), scale(c.b), scale(c.a)])
+                    .collect();
+                for (dst, &idx) in out.chunks_exact_mut(4).zip(f) {
+                    dst.copy_from_slice(&lut[idx as usize]);
                 }
             }
             Content::Grayscale { luts, frames } => {
-                let lut = &luts[t];
                 let f = frames.get(frame).ok_or(DifError::Invalid("frame index"))?;
-                for &s in f {
-                    let g = scale(lut[s as usize]);
-                    out.extend_from_slice(&[g, g, g, 0xFF]);
+                let lut: Vec<[u8; 4]> = luts[t]
+                    .iter()
+                    .map(|&v| {
+                        let g = scale(v);
+                        [g, g, g, 0xFF]
+                    })
+                    .collect();
+                for (dst, &s) in out.chunks_exact_mut(4).zip(f) {
+                    dst.copy_from_slice(&lut[s as usize]);
                 }
             }
         }

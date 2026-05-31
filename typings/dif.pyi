@@ -36,6 +36,7 @@ CodecName = Literal[
     "zstd",
     "zstd-3",
     "zstd-10",
+    "zstd-22",
     "lz4",
     "lz4-fast1",
     "lzav",
@@ -85,9 +86,11 @@ class Image:
         frames: list[list[int]],
         delays: list[int] | None = ...,
     ) -> Image: ...
-    def to_dif(self, codec: CodecName = ...) -> bytes:
+    def to_dif(self, codec: CodecName = ..., workers: int = ...) -> bytes:
         """Encode to a `.dif` container. `codec` is one variant string carrying
-        both family and level (default `"zstd-3"`, the study's best pick)."""
+        both family and level (default `"zstd-3"`, the study's best pick).
+        `workers` > 1 runs the multithreaded zstd/brotli encoder (other codecs
+        ignore it); the output is a standard container decoded identically."""
         ...
 
     def to_difr(self) -> bytes: ...

@@ -65,12 +65,12 @@ impl CodecId {
 /// Compress `data` with `codec` at `level`. The per-family meaning of `level`:
 /// Deflate 0–9 (libdeflate 1–12), Brotli quality 0–11, Zstd 1–22, Lz4/Lzav
 /// ignore it (only their fast level is wired). `Store` ignores it too.
-fn compress(data: &[u8], codec: CodecId, level: u8) -> Result<Vec<u8>> {
+fn compress(data: &[u8], codec: CodecId, level: u8, workers: u32) -> Result<Vec<u8>> {
     match codec {
         CodecId::Store => Ok(data.to_vec()),
         CodecId::Deflate => deflate_compress(data, level),
-        CodecId::Brotli => brotli_compress(data, level),
-        CodecId::Zstd => zstd_compress(data, level),
+        CodecId::Brotli => brotli_compress(data, level, workers),
+        CodecId::Zstd => zstd_compress(data, level, workers),
         CodecId::Lz4 => Ok(lz4_flex::block::compress(data)),
         CodecId::Lzav => lzav_compress(data),
     }
@@ -138,14 +138,72 @@ fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
 
+// `workers` > 1 (with the `brotli-mt` feature) runs `compress_multi`: the input
+// is split into independent meta-blocks compressed on parallel std threads and
+// written as ONE standard brotli stream, decoded by the normal path — no format
+// change. The cross-chunk window break costs a little ratio. Pays off on the slow
+// high-quality levels (brotli-11) where encode is CPU-bound. `workers` <= 1 (or
+// the feature off) keeps the single-thread `CompressorWriter`, byte-unchanged.
 #[cfg(feature = "std")]
-fn brotli_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
+#[cfg_attr(not(feature = "brotli-mt"), allow(unused_variables))]
+fn brotli_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
+    #[cfg(feature = "brotli-mt")]
+    if workers > 1 {
+        return brotli_compress_mt(data, level, workers);
+    }
     use std::io::Write as _;
     let mut out = Vec::new();
     {
         let mut w = brotli::CompressorWriter::new(&mut out, 4096, level as u32, 22);
         w.write_all(data).map_err(|_| DifError::CompressionFailed)?;
     }
+    Ok(out)
+}
+
+#[cfg(feature = "brotli-mt")]
+fn brotli_compress_mt(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
+    use brotli::enc::multithreading::compress_multi;
+    use brotli::enc::{
+        Allocator, BrotliEncoderMaxCompressedSizeMulti, BrotliEncoderParams, Owned, SendAlloc,
+        SliceWrapperMut, StandardAlloc, UnionHasher,
+    };
+
+    let mut params = BrotliEncoderParams::default();
+    params.quality = level as i32;
+    params.lgwin = 22;
+
+    // compress_multi needs an owned (`'static + Send`) input, so copy the body
+    // into an allocator-owned cell rather than borrowing it.
+    let mut ialloc = StandardAlloc::default();
+    let mut input = <StandardAlloc as Allocator<u8>>::alloc_cell(&mut ialloc, data.len());
+    input.slice_mut().copy_from_slice(data);
+    let mut owned = Owned::new(input);
+
+    // One allocator slot per thread; the spawner is brotli's internal std-thread
+    // pool. Cap at the fixed 16-slot array (matches brotli's own CLI driver).
+    let nthreads = (workers as usize).clamp(1, 16);
+    let mut allocs = [
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+        SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
+    ];
+    let mut out = alloc::vec![0u8; BrotliEncoderMaxCompressedSizeMulti(data.len(), nthreads)];
+    let n = compress_multi(&params, &mut owned, &mut out, &mut allocs[..nthreads])
+        .map_err(|_| DifError::CompressionFailed)?;
+    out.truncate(n);
     Ok(out)
 }
 
@@ -160,7 +218,7 @@ fn brotli_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "std"))]
-fn brotli_compress(_data: &[u8], _level: u8) -> Result<Vec<u8>> {
+fn brotli_compress(_data: &[u8], _level: u8, _workers: u32) -> Result<Vec<u8>> {
     Err(DifError::Invalid("brotli codec requires the `std` feature"))
 }
 
@@ -171,8 +229,29 @@ fn brotli_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 
 // --- Zstd: with the C-codec feature set (zstd-safe links C zstd) ---
 
+// `workers` > 0 runs zstd's multithreaded encoder (needs the `zstd-mt` feature,
+// host-only). The output is a standard zstd frame — internally more blocks, but
+// decoded by the same single-thread `zstd_decompress`, so no format change.
+// `workers` == 0 (or `zstd-mt` off) keeps the original one-shot path, byte-for-
+// byte identical to before, so single-thread `zstd-N` sizes are unchanged.
 #[cfg(feature = "c-codecs")]
-fn zstd_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
+#[cfg_attr(not(feature = "zstd-mt"), allow(unused_variables))]
+fn zstd_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
+    #[cfg(feature = "zstd-mt")]
+    if workers > 0 {
+        use zstd_safe::{CCtx, CParameter};
+        let mut cctx = CCtx::create();
+        cctx.set_parameter(CParameter::CompressionLevel(level as i32))
+            .map_err(|_| DifError::CompressionFailed)?;
+        cctx.set_parameter(CParameter::NbWorkers(workers))
+            .map_err(|_| DifError::CompressionFailed)?;
+        let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
+        let n = cctx
+            .compress2(out.as_mut_slice(), data)
+            .map_err(|_| DifError::CompressionFailed)?;
+        out.truncate(n);
+        return Ok(out);
+    }
     let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
     let n = zstd_safe::compress(out.as_mut_slice(), data, level as i32)
         .map_err(|_| DifError::CompressionFailed)?;
@@ -190,7 +269,7 @@ fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "c-codecs"))]
-fn zstd_compress(_data: &[u8], _level: u8) -> Result<Vec<u8>> {
+fn zstd_compress(_data: &[u8], _level: u8, _workers: u32) -> Result<Vec<u8>> {
     Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
@@ -202,10 +281,18 @@ fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 /// Serialize and compress an image into a `.dif` container at codec `level`.
 /// The level is recorded in the header for provenance; decode ignores it.
 pub fn to_dif(img: &DifImage, codec: CodecId, level: u8) -> Result<Vec<u8>> {
+    to_dif_workers(img, codec, level, 0)
+}
+
+/// Like [`to_dif`], but `workers` > 0 runs the multithreaded zstd encoder
+/// (other codecs ignore it). `workers` is encode-only — not stored — and the
+/// bytes stay a standard container decoded by [`from_dif`], so the file is
+/// indistinguishable from a single-thread `to_dif` at the same codec/level.
+pub fn to_dif_workers(img: &DifImage, codec: CodecId, level: u8, workers: u32) -> Result<Vec<u8>> {
     img.validate()?;
     let mut body = Vec::new();
     format::write_body(img, &mut body);
-    let compressed = compress(&body, codec, level)?;
+    let compressed = compress(&body, codec, level, workers)?;
 
     let mut out = Vec::with_capacity(compressed.len() + 15);
     out.extend_from_slice(&MAGIC_DIF);
