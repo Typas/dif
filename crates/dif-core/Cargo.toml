@@ -22,6 +22,10 @@ zstd-safe = { version = "7.2", optional = true }
 libdeflater = { version = "1.23", optional = true }
 # lzav-1 via the vendored C shim (avaneev/lzav); native/wasm-native only.
 lzav-shim = { path = "../lzav-shim", optional = true }
+# OKLab/OKLCh color math for the encode-side dark-theme derivation (`derive`
+# feature). f64-generic, so it reproduces the numpy reference within rounding.
+# Encode-only — gated out of the no_std core and the wasm decoder.
+palette = { version = "0.7.6", optional = true }
 
 [features]
 # Default is no_std + alloc: store / deflate / lz4, the pure-Rust portable core.
@@ -31,8 +35,11 @@ std = ["dep:brotli"]
 # Shared C codec set (zstd id 4 + lzav id 6). Linked natively on the host and
 # cross-compiled to wasm via zig for the browser decoder (see `wasm-native`).
 c-codecs = ["std", "dep:zstd-safe", "dep:lzav-shim"]
-# Native host build: the C codecs plus the libdeflate DEFLATE encoder.
-native = ["c-codecs", "dep:libdeflater"]
+# Encode-side dark-theme derivation (OKLab via `palette`). Encode-only, so it is
+# kept off the wasm decoder build to avoid pulling `palette` into the browser.
+derive = ["std", "dep:palette"]
+# Native host build: the C codecs, libdeflate encoder, and dark-theme derivation.
+native = ["c-codecs", "dep:libdeflater", "derive"]
 # wasm decoder with the C codecs cross-compiled (decode-only, so no libdeflate
-# encoder). Build with `cargo zigbuild` so the C deps compile to wasm.
+# encoder and no `derive`). Build with `cargo zigbuild` so the C deps compile to wasm.
 wasm-native = ["c-codecs"]

@@ -8,6 +8,18 @@ __version__: str
 
 Theme = tuple[int, str]
 Rgba = tuple[int, int, int, int]
+Strategy = Literal["keep", "invert", "arithmetic"]
+
+def derive_dark_palette(
+    colors: list[Rgba], strategy: Strategy, max_value: int
+) -> list[Rgba]:
+    """Derive a dark-theme palette from a light one (native OKLab). `max_value`
+    is 255 (8-bit) or 65535 (16-bit)."""
+    ...
+
+def derive_dark_lut(strategy: Strategy, max_value: int) -> list[int]:
+    """Build the dark-theme grayscale LUT (native OKLab); length `max_value + 1`."""
+    ...
 
 # The study's 7 codec variants plus bare-family aliases (each alias resolves to
 # its study-chosen default level: zstd->3, brotli->5, deflate->6, lz4->fast1,
@@ -49,12 +61,18 @@ class Image:
         (`4 * width * height` bytes). Palette dedup + index build run natively."""
         ...
 
-    def palette(self, theme: int) -> list[Rgba]:
-        """One theme's palette as `(r, g, b, a)` tuples."""
+    @staticmethod
+    def grayscale_from_samples(
+        width: int, height: int, depth_bits: int, samples: bytes
+    ) -> Image:
+        """Build a single-theme (light) grayscale image from a packed sample
+        buffer: `width*height` bytes for 8-bit, `2*width*height` little-endian
+        bytes for 16-bit. Add a dark theme with `add_dark_theme`."""
         ...
 
-    def add_indexed_theme(self, tag: int, name: str, palette: list[Rgba]) -> None:
-        """Append a theme and its palette (same length as existing palettes)."""
+    def add_dark_theme(self, strategy: Strategy) -> None:
+        """Derive a dark theme natively (OKLab palette / tone LUT) and append it.
+        No palette/LUT crosses the FFI boundary."""
         ...
 
     @staticmethod

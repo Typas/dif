@@ -30,11 +30,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub mod codec;
+#[cfg(feature = "derive")]
+pub mod derive;
 pub mod error;
 pub mod format;
 pub mod varint;
 
 pub use codec::{from_dif, to_dif, CodecId};
+#[cfg(feature = "derive")]
+pub use derive::{derive_dark_lut, derive_dark_palette, Strategy};
 pub use error::{DifError, Result};
 pub use format::{from_difr, to_difr};
 
@@ -289,6 +293,48 @@ pub fn indexed_from_rgba8(
         depth,
         themes,
         content: Content::Indexed { palettes, frames },
+        frame_delays: Vec::new(),
+    };
+    img.validate()?;
+    Ok(img)
+}
+
+/// Build a single-theme (light) grayscale image straight from a packed sample
+/// buffer (row-major). 8-bit samples are one byte each; 16-bit samples are
+/// **little-endian** `u16` pairs (`2 * width * height` bytes). The light theme
+/// gets an identity LUT; add a derived dark LUT afterwards. Mirrors
+/// [`indexed_from_rgba8`] so the Python binding hands over the raw bitmap instead
+/// of marshalling a per-pixel sample list across the FFI boundary. `alloc`-only.
+pub fn grayscale_from_samples(
+    width: u32,
+    height: u32,
+    depth: SampleDepth,
+    samples: &[u8],
+) -> Result<DifImage> {
+    let px = width as usize * height as usize;
+    if samples.len() != px * depth.bytes() {
+        return Err(DifError::Invalid("samples length != bytes*width*height"));
+    }
+    let frame: Vec<u16> = match depth {
+        SampleDepth::Eight => samples.iter().map(|&b| b as u16).collect(),
+        SampleDepth::Sixteen => samples
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect(),
+    };
+    let identity: Vec<u16> = (0..depth.levels()).map(|v| v as u16).collect();
+    let luts: Vec<Vec<u16>> = alloc::vec![identity];
+    let frames: Vec<Vec<u16>> = alloc::vec![frame];
+    let themes: Vec<Theme> = alloc::vec![Theme {
+        tag: ModeTag::Light,
+        name: String::from("light"),
+    }];
+    let img = DifImage {
+        width,
+        height,
+        depth,
+        themes,
+        content: Content::Grayscale { luts, frames },
         frame_delays: Vec::new(),
     };
     img.validate()?;

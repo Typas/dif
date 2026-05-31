@@ -3,9 +3,11 @@
 //! Python builds palette/grayscale structures (typically from numpy) and uses
 //! [`Image`] to encode to `.dif`/`.difr`, decode back, and render a theme.
 
+// `derive_dark_palette` / `derive_dark_lut` are called fully-qualified
+// (`dif_core::...`) so the same names can be exposed as module-level pyfunctions.
 use dif_core::{
-    from_dif, from_difr, indexed_from_rgba8, to_dif, to_difr, CodecId, Content, DifError, DifImage,
-    ModeTag, Rgba, SampleDepth, Theme,
+    from_dif, from_difr, grayscale_from_samples, indexed_from_rgba8, to_dif, to_difr, CodecId,
+    Content, DifError, DifImage, ModeTag, Rgba, SampleDepth, Strategy, Theme,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -20,6 +22,16 @@ fn depth(bits: u32) -> PyResult<SampleDepth> {
         8 => Ok(SampleDepth::Eight),
         16 => Ok(SampleDepth::Sixteen),
         _ => Err(PyValueError::new_err("depth_bits must be 8 or 16")),
+    }
+}
+
+/// Map a palette's `max_value` (255 or 65535) to its sample depth. Used by the
+/// module-level derivation helpers, which take `max_value` like the Python API.
+fn depth_for_max(max_value: u16) -> PyResult<SampleDepth> {
+    match max_value {
+        255 => Ok(SampleDepth::Eight),
+        65535 => Ok(SampleDepth::Sixteen),
+        _ => Err(PyValueError::new_err("max_value must be 255 or 65535")),
     }
 }
 
@@ -131,38 +143,49 @@ impl Image {
         Ok(Image { inner })
     }
 
-    /// One theme's palette as `(r, g, b, a)` tuples (small — cheap to marshal).
-    /// Lets Python derive a dark palette from the Rust-built light one.
-    fn palette(&self, theme: usize) -> PyResult<Vec<(u16, u16, u16, u16)>> {
-        match &self.inner.content {
-            Content::Indexed { palettes, .. } => {
-                let p = palettes
-                    .get(theme)
-                    .ok_or_else(|| PyValueError::new_err("theme index out of range"))?;
-                Ok(p.iter().map(|c| (c.r, c.g, c.b, c.a)).collect())
-            }
-            _ => Err(PyValueError::new_err("not an indexed image")),
-        }
-    }
-
-    /// Append a theme and its palette (same length as the existing palettes).
-    /// Used to attach the Python-derived dark theme to a Rust-built light image.
-    fn add_indexed_theme(
-        &mut self,
-        tag: u8,
-        name: String,
-        palette: Vec<(u16, u16, u16, u16)>,
-    ) -> PyResult<()> {
-        let theme = Theme { tag: ModeTag::from_u8(tag).map_err(map_err)?, name };
+    /// Derive a dark theme natively and append it. For an indexed image the dark
+    /// palette is derived from theme 0's palette; for grayscale a dark tone LUT is
+    /// built. No palette/LUT crosses the FFI boundary — the converter just calls
+    /// this after building the light image. `strategy` is `"keep"`, `"invert"`,
+    /// or `"arithmetic"` (`"keep"` is a no-op caller-side and not expected here).
+    fn add_dark_theme(&mut self, strategy: &str) -> PyResult<()> {
+        let strat = Strategy::from_name(strategy).map_err(map_err)?;
+        let depth = self.inner.depth;
         match &mut self.inner.content {
             Content::Indexed { palettes, .. } => {
-                palettes.push(palette.into_iter().map(|(r, g, b, a)| Rgba::new(r, g, b, a)).collect());
+                let light = palettes
+                    .first()
+                    .ok_or_else(|| PyValueError::new_err("image has no source palette"))?;
+                let dark = dif_core::derive_dark_palette(light, strat, depth);
+                palettes.push(dark);
             }
-            _ => return Err(PyValueError::new_err("not an indexed image")),
+            Content::Grayscale { luts, .. } => {
+                luts.push(dif_core::derive_dark_lut(strat, depth));
+            }
         }
-        self.inner.themes.push(theme);
+        self.inner
+            .themes
+            .push(Theme { tag: ModeTag::Dark, name: String::from("dark") });
         self.inner.validate().map_err(map_err)?;
         Ok(())
+    }
+
+    /// Build a single-theme (light) grayscale image straight from a packed sample
+    /// buffer: `width*height` bytes for 8-bit, or `2*width*height`
+    /// **little-endian** bytes for 16-bit. Mirrors [`Image::indexed_from_rgba8`]
+    /// so Python hands over the raw bitmap instead of marshalling a per-pixel
+    /// sample list. Add a dark theme afterwards with [`Image::add_dark_theme`].
+    #[staticmethod]
+    #[pyo3(signature = (width, height, depth_bits, samples))]
+    fn grayscale_from_samples(
+        width: u32,
+        height: u32,
+        depth_bits: u32,
+        samples: &[u8],
+    ) -> PyResult<Image> {
+        let inner =
+            grayscale_from_samples(width, height, depth(depth_bits)?, samples).map_err(map_err)?;
+        Ok(Image { inner })
     }
 
     /// Build a grayscale image.
@@ -266,9 +289,35 @@ impl Image {
     }
 }
 
+/// Derive a dark-theme palette from a light one (native OKLab). `colors` is a
+/// list of `(r, g, b, a)`; `strategy` is `"keep"`/`"invert"`/`"arithmetic"`;
+/// `max_value` is 255 (8-bit) or 65535 (16-bit). Single source of truth for the
+/// Python `dif_tools.themes.derive_palette` wrapper.
+#[pyfunction]
+fn derive_dark_palette(
+    colors: Vec<(u16, u16, u16, u16)>,
+    strategy: &str,
+    max_value: u16,
+) -> PyResult<Vec<(u16, u16, u16, u16)>> {
+    let strat = Strategy::from_name(strategy).map_err(map_err)?;
+    let pal: Vec<Rgba> = colors.into_iter().map(|(r, g, b, a)| Rgba::new(r, g, b, a)).collect();
+    let out = dif_core::derive_dark_palette(&pal, strat, depth_for_max(max_value)?);
+    Ok(out.into_iter().map(|c| (c.r, c.g, c.b, c.a)).collect())
+}
+
+/// Build the dark-theme grayscale LUT (native OKLab). Length is `max_value + 1`
+/// (256 or 65536). Backs the Python `dif_tools.themes.derive_lut` wrapper.
+#[pyfunction]
+fn derive_dark_lut(strategy: &str, max_value: u16) -> PyResult<Vec<u16>> {
+    let strat = Strategy::from_name(strategy).map_err(map_err)?;
+    Ok(dif_core::derive_dark_lut(strat, depth_for_max(max_value)?))
+}
+
 #[pymodule]
 fn dif(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Image>()?;
+    m.add_function(wrap_pyfunction!(derive_dark_palette, m)?)?;
+    m.add_function(wrap_pyfunction!(derive_dark_lut, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

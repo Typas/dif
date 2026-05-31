@@ -14,7 +14,7 @@ import dif
 import numpy as np
 from PIL import Image as PILImage
 
-from .themes import STRATEGIES, derive_lut, derive_palette, identity_lut
+from .themes import STRATEGIES
 
 _GRAY_16_MODES = {"I", "I;16", "I;16B", "I;16L", "I;16N"}
 
@@ -38,7 +38,7 @@ def load_image(path: str | Path) -> tuple[np.ndarray, bool, int]:
         return arr, True, 16
     rgba = np.asarray(im.convert("RGBA"))
     if _looks_grayscale(rgba) and bool(np.all(rgba[..., 3] == 255)):
-        return rgba[..., 0].astype(np.uint16), True, 8
+        return rgba[..., 0].astype(np.uint8), True, 8
     return rgba, False, 8
 
 
@@ -90,36 +90,30 @@ def dif_image_from_array(
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
-    max_value = (1 << depth_bits) - 1
 
+    # Hand the raw bitmap to Rust and build the palette/index (color) or the
+    # sample frame (grayscale) natively — like `png_encode(arr)` — instead of
+    # running `np.unique`/`.tolist()` over millions of pixels and marshalling a
+    # per-pixel list across PyO3 (that pixel work was ~99% of DIF encode time).
     if is_gray:
         h, w = arr.shape
-        samples = arr.reshape(-1).astype(np.int64).tolist()
-        themes = [(0, "light")]
-        luts = [identity_lut(max_value)]
-        if strategy != "keep":
-            themes.append((1, "dark"))
-            luts.append(derive_lut(strategy, max_value))
-        return dif.Image.grayscale(w, h, depth_bits, themes, luts, [samples])
+        gray = (
+            np.ascontiguousarray(arr, dtype=np.uint8)
+            if depth_bits == 8
+            else np.ascontiguousarray(arr, dtype="<u2")  # explicit little-endian
+        )
+        img = dif.Image.grayscale_from_samples(w, h, depth_bits, gray.tobytes())
+    else:
+        h, w = arr.shape[:2]
+        rgba = np.ascontiguousarray(arr[..., :4], dtype=np.uint8).tobytes()
+        img = dif.Image.indexed_from_rgba8(w, h, depth_bits, rgba)
 
-    h, w = arr.shape[:2]
-    # Hand the raw RGBA8 buffer to Rust: the palette dedup + per-pixel index
-    # build happen natively (like png_encode(arr)), instead of running
-    # `np.unique` over millions of pixels in Python and marshalling an index
-    # list across PyO3 — that pixel work was ~99% of DIF encode time.
-    rgba = np.ascontiguousarray(arr[..., :4], dtype=np.uint8).tobytes()
-    img = dif.Image.indexed_from_rgba8(w, h, depth_bits, rgba)
+    # Synthesize the dark theme natively: the derivation (OKLab palette / tone
+    # LUT) runs in Rust off the small light theme, so no palette/LUT crosses the
+    # FFI boundary. `"keep"` leaves the image single-theme.
     if strategy != "keep":
-        # The dark theme is derived in Python from the (small) light palette,
-        # then appended; only the palette crosses the boundary, not pixels.
-        light = np.array(img.palette(0), dtype=np.int64)
-        dark = derive_palette(light, strategy, max_value)
-        img.add_indexed_theme(1, "dark", _to_palette(dark))
+        img.add_dark_theme(strategy)
     return img
-
-
-def _to_palette(colors: np.ndarray) -> list[tuple[int, int, int, int]]:
-    return [(int(c[0]), int(c[1]), int(c[2]), int(c[3])) for c in colors]
 
 
 def convert_file(

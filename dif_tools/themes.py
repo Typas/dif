@@ -14,13 +14,17 @@ strategies, matching the project spec:
 
 Every strategy keeps alpha untouched and the *source* theme as the lossless
 identity, so decoding the source theme reproduces the original pixels exactly.
+
+The derivation itself lives in Rust (``dif`` extension, OKLab via the ``palette``
+crate); these helpers are thin wrappers so Python callers/tests share that single
+implementation. The converter doesn't use them — it calls ``Image.add_dark_theme``
+so no palette crosses the FFI boundary.
 """
 
 from __future__ import annotations
 
+import dif
 import numpy as np
-
-from .colorspace import derive_dark_oklab
 
 STRATEGIES = ("keep", "invert", "arithmetic")
 
@@ -28,35 +32,14 @@ STRATEGIES = ("keep", "invert", "arithmetic")
 def derive_palette(colors: np.ndarray, strategy: str, max_value: int) -> np.ndarray:
     """Map an ``(N, 4)`` RGBA palette (ints ``0..max_value``) to the dark theme."""
     colors = np.asarray(colors)
-    if strategy == "keep":
-        return colors.copy()
-    rgb = colors[:, :3]
-    alpha = colors[:, 3:4]
-    if strategy == "invert":
-        new_rgb = max_value - rgb
-    elif strategy == "arithmetic":
-        unit = rgb.astype(np.float64) / max_value
-        new_rgb = np.rint(derive_dark_oklab(unit) * max_value)
-    else:
-        raise ValueError(f"unknown strategy {strategy!r}; choose from {STRATEGIES}")
-    new_rgb = np.clip(new_rgb, 0, max_value).astype(colors.dtype)
-    return np.concatenate([new_rgb, alpha], axis=1)
+    pal = [(int(c[0]), int(c[1]), int(c[2]), int(c[3])) for c in colors]
+    dark = dif.derive_dark_palette(pal, strategy, max_value)
+    return np.asarray(dark, dtype=colors.dtype)
 
 
 def derive_lut(strategy: str, max_value: int) -> list[int]:
     """Build the dark-theme grayscale LUT over ``0..=max_value``."""
-    levels = max_value + 1
-    base = np.arange(levels, dtype=np.int64)
-    if strategy == "keep":
-        return base.tolist()
-    if strategy == "invert":
-        return (max_value - base).tolist()
-    if strategy == "arithmetic":
-        gray = np.repeat((base / max_value)[:, None], 3, axis=1)  # (levels, 3)
-        # Gray is achromatic, so derive_dark_oklab flips it (L' = 1 - L).
-        out = derive_dark_oklab(gray)[:, 0]  # gray stays gray; take one channel
-        return np.clip(np.rint(out * max_value), 0, max_value).astype(np.int64).tolist()
-    raise ValueError(f"unknown strategy {strategy!r}; choose from {STRATEGIES}")
+    return list(dif.derive_dark_lut(strategy, max_value))
 
 
 def identity_lut(max_value: int) -> list[int]:

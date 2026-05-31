@@ -125,15 +125,22 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
   Encode **4.8 → ~410 MB/s** (zstd-3/lz4/lzav), now *faster than png*; codec
   ranking clean (brotli-11 the lone slow one). Intermediate numpy fix (pack
   RGBA8→u32, 1-D `np.unique`, ~7× over `axis=0`) is superseded.
-- [ ] **Refactor (later)** — native-build follow-ups:
-  - Grayscale path still marshals `samples` via `.tolist()` → add a native
-    `grayscale_from_samples` mirroring `indexed_from_rgba8`.
-  - `dif.Image.indexed(...)` list constructor now redundant for the converter
-    (only the native path is used); keep for tests or consolidate.
-  - `_load` / `_to_palette` duplicated across `bench/compare.py` and
-    `dif_tools/convert.py` — dedupe.
-  - Dark-theme OKLCh derivation stays in Python; port to Rust only if 2-theme
-    encode speed (~210 MB/s vs ~410) becomes a target.
+- [x] **Refactor** — native-build follow-ups, all landed:
+  - [x] Grayscale native: `dif_core::grayscale_from_samples` (+ `dif.Image.
+    grayscale_from_samples`) — Python hands the raw sample buffer (u8 / LE-u16)
+    like `indexed_from_rgba8`; no more `.tolist()`. Encode off the ~5 MB/s floor
+    (→ ~500 MB/s single-theme on a SIPI gray plate).
+  - [x] Dark-theme OKLCh derivation **ported to Rust** (`dif_core::derive` via the
+    `palette` crate, f64; `derive` feature, encode-only — gated out of the wasm
+    decoder). Converter calls `Image.add_dark_theme(strategy)`, so no palette/LUT
+    crosses PyO3. 2-theme encode **210 → ~418 MB/s** (parity with single-theme
+    ~472; faster than png). `themes.py` `derive_palette`/`derive_lut` are now thin
+    wrappers over `dif.derive_dark_palette`/`derive_dark_lut`; `colorspace.py`
+    deleted (single source of truth in Rust).
+  - [x] `_load` deduped — `load_image` returns the natural dtype (gray-8 → uint8);
+    `bench/compare.py` calls it directly. `_to_palette` removed with the old path.
+  - `dif.Image.indexed(...)`/`grayscale(...)` list constructors **kept** — only
+    `tests/test_codec.py` uses them; the `*_from_*` helpers are the converter paths.
 - [ ] Size comparison vs png / lossless jxl / webp / avif
 - [ ] Theme-matching change demo captured
 - [ ] Encode/decode speed vs gif/png/jxl/webp/avif written up
@@ -157,3 +164,5 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Made `bench formats` encode honest: timed **raw bitmap → file** (moved the palette/index + dark-theme build into the timed closure via new `dif_image_from_array(arr, …)`, starting from the in-memory array — parity with `png_encode(arr)`, no file I/O timed). Table layout: one **2-theme** headline row (`dif-zstd-3-2t`, the shipped light+dark `.dif`) + **single-theme** codec rows (apples-to-apples with the single-image formats). Other formats pinned to library defaults (avif `speed=6` — imagecodecs otherwise leaves aom at speed 0 ≈0.3 MB/s; jxl `effort=7`; webp default). imagecodecs 2026.5.10 bundles aom-only (no svt/rav1e); system/pyproject installs aren't picked up.
 - **2026-05-31** — Found the DIF **encode build bottleneck**: all codecs floor at ~4.8 MB/s. First suspected `.tolist()`/PyO3 marshalling, but the split showed `np.unique(flat, axis=0)` (lexsort over 2.4M RGBA rows) was ~99% (≈1.9 s); `.tolist()`+PyO3 only ~60 ms. `bench codecs` (over the `.difr` body) remains the codec-speed source of truth.
 - **2026-05-31** — Killed the bottleneck by moving pixel work to Rust: new `dif_core::indexed_from_rgba8` (`std`-gated `HashMap<u32,u32>` dedup in one pass) + `dif.Image.indexed_from_rgba8` / `palette()` / `add_indexed_theme()`. `dif_image_from_array` now passes the raw RGBA8 buffer to native code (parity with `png_encode(arr)`); the dark theme is derived in Python from the small light palette and appended. Encode **4.8 → ~410 MB/s** (zstd-3/lz4/lzav) — faster than png; codec ranking clean (brotli-11 alone slow at 7.5 MB/s). Grayscale path still uses `.tolist()`; logged refactor TODOs in the checklist.
+- **2026-05-31** — Closed the refactor TODOs. (1) **Native grayscale** `dif_core::grayscale_from_samples` (alloc-only, LE-u16) + `dif.Image.grayscale_from_samples`; Python hands the raw sample buffer, no `.tolist()` — gray encode off the ~5 MB/s floor to ~500 MB/s single-theme. (2) **Dark-theme OKLCh derivation ported to Rust** (`crates/dif-core/src/derive.rs`) using the **`palette` 0.7.6** crate (f64, so it reproduces the numpy reference — invert exact, arithmetic within the pinned thresholds). New `derive` feature (`= std + palette`) folded into `native`; **excluded from `wasm-native`** so the browser decoder pulls no `palette` (verified via `cargo tree`). Converter now calls `Image.add_dark_theme(strategy)` (derives + appends entirely native — no palette/LUT crosses PyO3); `themes.py` `derive_palette`/`derive_lut` became thin wrappers over module fns `dif.derive_dark_palette`/`derive_dark_lut`, and `colorspace.py` was deleted (single source of truth in Rust). 2-theme encode **~210 → ~418 MB/s** (parity with single-theme ~472, still > png). (3) Deduped `_load`  <!-- early-out below pushed 2-theme higher --> — `load_image` returns the natural dtype (gray-8 → uint8), `bench/compare.py` uses it directly; `_to_palette` gone. `indexed`/`grayscale` list ctors kept for `test_codec.py`. Verified: `cargo test --features native` (20, +5 derive), `clippy --all-features` clean, `pytest` 34 green.
+- **2026-05-31** — Dark-derive gamut **early-out**: skip the 25-iter OKLCh chroma search when the color already fits sRGB (every gray/achromatic color + most tone-compressed ones). Output byte-identical (the in-gamut branch already converged to `k=1`); removed the two dead binding methods `Image.palette`/`add_indexed_theme` (+ stub). 2-theme encode: **grayscale 142 → ~464 MB/s** (256-entry LUT is all in-gamut, search fully skipped), **diagram 417 → ~459** (vs ~481 single-theme). Confirmed the observation that 2-theme size-diff and speed-diff both scale with palette size N (extra stored palette ∝ N, derivation cost ∝ N).

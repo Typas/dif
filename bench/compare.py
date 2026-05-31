@@ -51,12 +51,6 @@ class FormatResult:
     note: str = ""
 
 
-def _load(path: str | Path) -> tuple[np.ndarray, bool, int]:
-    arr, is_gray, depth = load_image(path)
-    arr = arr.astype(np.uint8) if depth == 8 else arr.astype(np.uint16)
-    return arr, is_gray, depth
-
-
 def _as_rgb(arr: np.ndarray, is_gray: bool) -> np.ndarray:
     """A contiguous 3-channel array for codecs that reject single-channel input."""
     rgb = np.repeat(arr[..., None], 3, axis=2) if is_gray else arr[..., :3]
@@ -96,7 +90,9 @@ def compare_image(
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
     raster = resolve_raster(path)
-    arr, is_gray, depth = _load(raster)
+    # `load_image` returns the natural dtype: uint8 for 8-bit (gray or RGBA),
+    # uint16 for 16-bit grayscale — exactly what the encoders below expect.
+    arr, is_gray, depth = load_image(raster)
     rgb = _as_rgb(arr, is_gray)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
