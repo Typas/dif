@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # `native` adds zstd + the libdeflate encoder + the lzav C shim (Python is a
-# native build, not wasm), so all 7 study variants are encodable from Python.
+# native build, not wasm), so all 8 study variants are encodable from Python.
 dif-core = { path = "../dif-core", features = ["native"] }
 pyo3 = { version = "0.24", features = ["extension-module"] }
 

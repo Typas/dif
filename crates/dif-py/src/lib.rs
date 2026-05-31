@@ -47,7 +47,7 @@ fn mode_tag(s: &str) -> PyResult<ModeTag> {
     }
 }
 
-/// Map a codec string to `(family, level)`. Accepts the study's 7 variant
+/// Map a codec string to `(family, level)`. Accepts the study's 8 variant
 /// strings; bare family names alias their study-chosen default level. This is
 /// the single source of truth for per-family level semantics.
 fn codec_id(s: &str) -> PyResult<(CodecId, u8)> {

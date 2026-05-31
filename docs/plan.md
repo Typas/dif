@@ -27,9 +27,9 @@ Inspired by GIF, use color palette to create mapping. One new thing, color theme
 - Lossless compression, need codecs for testing the speed and size.
 - Evaluation: $ M = 4 * log(S) - log(C) / 2 - log(D) $, where $S = Size_Original / Size_Compressed$, $C = Memcpy_Speed/Compress_Speed$, $D = Memcpy_Speed/Decompress_Speed$. Higher is better.
 - Candidates: libdeflate level 6 (baseline); brotli level 5, 11; bzip3 level 1, 5; kanzi level 1, 2; lz4hc level 4, 9; lz4 fast level 1; lzav level 1; zstd fast level 1; zstd level 3, 10, 22.
-- Chosen: zstd level 3 (best, default), lzav level 1 (fast), zstd level 10 (medium-high ratio), lz4 fast level 1 (fastest), brotli level 5 (high ratio), libdeflate level 6 (legacy support), brotli level 11 (extreme high ratio).
-- Eliminated: bzip3 (slow), kanzi (unstable), lz4hc (slow on compression), zstd level 22 (slow on compression).
-- Wired into `.dif`: the 7 chosen variants map to (codec byte, level byte) pairs;
+- Chosen: zstd level 3 (best, default), lzav level 1 (fast), zstd level 10 (medium-high ratio), lz4 fast level 1 (fastest), brotli level 5 (high ratio), libdeflate level 6 (legacy support), brotli level 11 (extreme high ratio), zstd level 22 (max ratio, slow encode).
+- Eliminated: bzip3 (slow), kanzi (unstable), lz4hc (slow on compression).
+- Wired into `.dif`: the 8 chosen variants map to (codec byte, level byte) pairs;
   the header carries both. XZ was dropped from the format (LZMA range-coder,
   bzip3-like, weak lzbench position — not a chosen variant); its codec id 3 is now
   reserved/rejected.
@@ -80,7 +80,7 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - [x] Color themes / named palette
 - [x] Frame model (APNG/GIF-style)
 - [x] Format spec — `spec/dif-spec.typ`
-- [x] Codec `level` byte + 7 variant ids (lz4 + lzav), XZ dropped — format v2
+- [x] Codec `level` byte + 8 variant ids (lz4 + lzav), XZ dropped — format v2
 - [x] Spec **structure** cross-checked against the v2 implementation —
   `spec/dif-spec.typ`: relabelled v1→**v2**; fixed the `M` formula to
   `4·log(S) − log(C)/2 − log(D)` (matched `bench/metric.py`); deleted the stale
@@ -113,13 +113,13 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 
 ### Decode & display
 - [x] Wasm decoder — `crates/dif-wasm/`
-- [x] Wasm decodes all 7 codecs in-browser (zig cross-compile, `wasm32-wasip1`)
+- [x] Wasm decodes all 8 codecs in-browser (zig cross-compile, `wasm32-wasip1`)
 - [x] Browser respects theme — `web/`
 - [x] VS Codium extension — `extension/` (`extension.ts`, `viewer.js`)
 - [x] Extension wasm fixed + build recipes — the committed bundle was a stale
   pre-`wasm-native` wasm-pack build (pure-Rust only, **couldn't decode the
   default zstd-3 `.dif`**). New `just ext-build` reuses the zig/wasip1 decoder
-  from `just wasm` (all 7 codecs) + wires `wasi_shim.js` into the webview
+  from `just wasm` (all 8 codecs) + wires `wasi_shim.js` into the webview
   (import map + CSP `cspSource`); `just ext-package` emits a `.vsix` (GUI-install
   in VS Code / VSCodium / Cursor). Dropped the broken `build:wasm` npm script.
   `just ext-build && ext-package` verified clean (`.vsix` 200 KB, 513 KB bundle).
@@ -201,3 +201,4 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Closed an **unverified mt path**. `bench formats` drives the rust multithreaded encode (`to_dif_workers` → zstd `NbWorkers` / brotli `compress_multi`) for its `-mt` rows but never checks the decode matches the input — every dif row passes `expected=None`, so `lossless` is hardcoded `True`. `bench codecs` has the roundtrip check (`decomp != raw`) but had no mt. Added `bench.codecs.dif_codecs(numthreads)`: rust-`dif`-backed codecs that compress the `.difr` body through the real `.dif` container and decode back, so the mt encode path is exercised **and** roundtrip-verified by the existing check. Empty unless `--numthreads > 1` (default run unchanged); each codec yields a single-thread reference (`dif-{c}`) + worker variant (`dif-{c}-mt`) so the worker size delta shows side by side. Verified one image per dir (tiff + drawio, `--numthreads 4`): all `dif-*`/`-mt` rows `ok=1`; zstd delta ≈0 (body too small to split), brotli moves a little either way — matches the `codec.rs` comments. Moved `plan.md` + `plan-format-codecs.md` to `docs/`; `*.tsv` now tracked via git-LFS.
 - **2026-05-31** — **Extension wasm fix + build recipes.** The committed `extension/media/pkg` was a stale pre-`wasm-native` wasm-pack bundle (225 KB, pure-Rust store/deflate/brotli/lz4) that **could not decode the format's default zstd-3 `.dif`** — and `package.json`'s `build:wasm` (wasm-pack on wasm32-unknown-unknown) can no longer build dif-wasm at all, since it now pulls the C codecs. Added `just ext-build` (reuses the zig/wasip1 decoder from `just wasm` — all 7 codecs — stages it + `wasi_shim.js` into `media/`, `pnpm install`, `tsc`) and `just ext-package` (`@vscode/vsce` → `.vsix`, GUI-installable in VS Code / VSCodium / Cursor). Wired the wasi shim into the webview (`extension.ts`: import map + CSP `cspSource`, mirroring `web/`), dropped the dead `build:wasm` script, added `extension/README.md` + `.gitignore` (the staged bundle/shim/`out`/`.vsix` are generated, sources are `crates/dif-wasm` + `web/wasi_shim.js`). New bundle 525 KB, carries `zstd`/`lzav`, byte-identical to `web/pkg`. Live theme-switch verified in VSCodium.
 - **2026-05-31** — **Spec structural cross-check** (`spec/dif-spec.typ`). Relabelled v1→**v2**; corrected the `M` formula to `4·log(S) − log(C)/2 − log(D)` (was the superseded `log(5S/4) − log(C/4) − log(D)`; now matches `bench/metric.py`); deleted the stale paragraph claiming XZ cross-library interop (XZ removed in v2, id 3 reserved — the text contradicted the codec table); candidate list `zstd fast/3/10/22`; dropped a lingering "v1" in the evaluation note. Header/body/varint/codec-table re-verified against `format.rs` + `codec.rs`; `typst compile` clean. **Held back** the "spec final" claim: the Evaluation example table (DIF 233 B, `rel` normalized to it) is stale vs the 245 B v2 demo — needs regenerated all-format numbers first.
+- **2026-05-31** — **zstd-22 promoted to chosen → 8 variants.** Previously eliminated (slow encode) but kept benchable; now a shipped variant (`zstd`'s max-ratio option, the slow-encode analogue to `brotli-11`). Added it to the converter CLI `--codec` choices (`dif_tools/__main__.py`); it was already in `dif-py` `codec_id`, `bench/compare.py` `DIF_CODECS`, and the `CodecName` stub. Bumped the "7"→"8" variant count across the live docs/comments (README, `dif-py` lib.rs + Cargo, `typings/dif.pyi`, `justfile`, plan checklist) and moved it Eliminated→Chosen. Decode is level-agnostic, so the wasm decoder already handled it (`Zstd` family); no rebuild needed.

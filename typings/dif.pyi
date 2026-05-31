@@ -21,7 +21,7 @@ def derive_dark_lut(strategy: Strategy, max_value: int) -> list[int]:
     """Build the dark-theme grayscale LUT (native OKLab); length `max_value + 1`."""
     ...
 
-# The study's 7 codec variants plus bare-family aliases (each alias resolves to
+# The study's 8 codec variants plus bare-family aliases (each alias resolves to
 # its study-chosen default level: zstd->3, brotli->5, deflate->6, lz4->fast1,
 # lzav->1). See crates/dif-py codec_id for the single source of truth.
 CodecName = Literal[

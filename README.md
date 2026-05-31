@@ -5,7 +5,7 @@ display**. Like GIF it maps pixels through a colour palette, but each colour
 carries one entry *per named theme* (e.g. `light` / `dark`), so a single file
 re-themes itself to match the browser or editor instead of staying a fixed
 bitmap. Grayscale (8/16-bit) and APNG/GIF-style frames are supported, and the
-compressed `.dif` body uses one of 7 study-chosen lossless codecs.
+compressed `.dif` body uses one of 8 study-chosen lossless codecs.
 
 - Format spec: [`spec/dif-spec.typ`](spec/dif-spec.typ)
 - Design + worklog: [`docs/plan.md`](docs/plan.md), [`docs/plan-format-codecs.md`](docs/plan-format-codecs.md)
@@ -81,8 +81,18 @@ A bare `just` (or `just --list`) prints every recipe.
 |--------------|--------------------------------------------------------------------------------------------------------------------|
 | `py`         | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
 | `setup-wasm` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
-| `wasm`       | Build the browser decoder into `web/pkg` (all 7 codecs cross-compiled via `zig cc`).                               |
+| `wasm`       | Build the browser decoder into `web/pkg` (all 8 codecs cross-compiled via `zig cc`).                               |
 | `regen-demo` | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
+
+### VS Code / Codium / Cursor extension
+| Recipe                  | Does                                                                                                                |
+|-------------------------|---------------------------------------------------------------------------------------------------------------------|
+| `ext-build`             | Stage the wasip1 decoder (all 8 codecs) + wasi shim into `extension/media/`, then compile the TypeScript.           |
+| `ext-package`           | Build `dif-viewer.vsix` into the repo root.                                                                         |
+| `ext-install [variant]` | Package, then install via the editor CLI — `variant` is the binary on PATH: `code` (default), `codium`, `cursor`, … |
+
+The `.vsix` also installs through the GUI (Extensions ▸ **Install from VSIX…**) in
+any VS Code-family editor.
 
 ### `.drawio` rendering
 | Recipe              | Does                                                                           |

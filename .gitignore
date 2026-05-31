@@ -15,8 +15,9 @@ node_modules/
 crates/dif-wasm/pkg/
 web/pkg/
 extension/media/pkg/
+extension/media/wasi_shim.js
 extension/out/
-extension/*.vsix
+*.vsix
 
 # Generated artifacts
 spec/*.pdf

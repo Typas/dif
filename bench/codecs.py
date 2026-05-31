@@ -9,7 +9,7 @@ because some libraries (libdeflate) require the output size up front.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, cast
 
 
 @dataclass
@@ -173,7 +173,9 @@ def dif_codecs(numthreads: int = 1) -> list[Codec]:
 
     def _enc(codec: str, workers: int):
         # raw is `.difr` bytes -> rebuild the image -> encode the `.dif` container.
-        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(codec, workers))
+        # `codec` is a runtime str; narrow to the typed alias (mirrors compare.py).
+        name = cast("dif.CodecName", codec)
+        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(name, workers))
 
     def _dec(comp: bytes, _n: int) -> bytes:
         return bytes(dif.Image.from_dif(comp).to_difr())

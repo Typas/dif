@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
             "brotli-11",
             "zstd-3",
             "zstd-10",
+            "zstd-22",
             "lz4-fast1",
             "lzav-1",
         ),

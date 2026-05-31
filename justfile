@@ -58,7 +58,7 @@ setup-wasm:
 
 # Build the wasm decoder into web/pkg. The C codecs (zstd id 4, lzav id 6)
 # cross-compile through `zig cc` (cargo-zigbuild) against wasi-libc, so the
-# browser decodes all 7 variants — including the default zstd-3 — not just the
+# browser decodes all 8 variants — including the default zstd-3 — not just the
 # pure-Rust store/deflate/brotli/lz4 set. wasm-bindgen then emits the JS glue.
 # The wasip1 module needs a small wasi shim in the loader (see web/main.js).
 # Run `just setup-wasm` once first.
@@ -74,7 +74,7 @@ regen-demo:
     uv run python web/regen_flowchart.py
 
 # --- VSCodium / VS Code extension -----------------------------------------
-# The extension reuses the wasip1 decoder built by `just wasm` (all 7 codecs)
+# The extension reuses the wasip1 decoder built by `just wasm` (all 8 codecs)
 # plus its wasi shim, so the custom editor decodes the same files the browser
 # demo does — including the default zstd-3 `.dif`. `build:wasm` (wasm-pack) is
 # gone: dif-wasm pulls the C codecs, which only build through the zig/wasip1 path.
@@ -87,10 +87,16 @@ ext-build: wasm
     pnpm --dir extension install
     pnpm --dir extension run compile
 
-# Package a .vsix. Install it via the editor GUI (Extensions > Install from VSIX),
-# which works in VS Code / VSCodium / Cursor / any VS Code-family editor.
+# Package a .vsix into the repo root. Install via the editor GUI (Extensions >
+# Install from VSIX) in VS Code / VSCodium / Cursor / any VS Code-family editor,
+# or use `just ext-install` below.
 ext-package: ext-build
-    cd extension && pnpm dlx @vscode/vsce package --no-dependencies
+    cd extension && pnpm dlx @vscode/vsce package --no-dependencies --out "{{justfile_directory()}}/dif-viewer.vsix"
+
+# Install the packaged extension via an editor CLI. `variant` is the editor
+# binary on PATH: `code` (default), `codium`, `cursor`, ...
+ext-install variant="code": ext-package
+    {{variant}} --install-extension "{{justfile_directory()}}/dif-viewer.vsix"
 
 # --- drawio rendering (local container) ------------------------------------
 # rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
