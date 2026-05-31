@@ -46,21 +46,50 @@ def load_image(path: str | Path) -> tuple[np.ndarray, bool, int]:
 _DRAWIO_PNG_CACHE = Path(__file__).resolve().parent.parent / "out" / "drawio-png"
 
 
+def resolve_raster(path: str | Path) -> Path:
+    """Map any input to a raster path PIL can open.
+
+    A ``.drawio`` input is rendered to a PNG under ``out/drawio-png/`` (keeping
+    ``testdata/`` clean); every other path passes through unchanged. Shared by
+    the DIF converter and the format comparison so both see the same pixels.
+    """
+    path = Path(path)
+    if path.suffix.lower() == ".drawio":
+        from .drawio import render_drawio_to_png
+
+        png = _DRAWIO_PNG_CACHE / (path.stem + ".png")
+        # Reuse a cached render unless the source is newer (rendering shells out
+        # to the drawio container/desktop — tens of seconds; benches re-resolve
+        # the same diagram repeatedly).
+        if png.exists() and png.stat().st_mtime >= path.stat().st_mtime:
+            return png
+        return Path(render_drawio_to_png(path, png))
+    return path
+
+
 def image_to_dif_image(path: str | Path, strategy: str = "arithmetic") -> "dif.Image":
     """Build a :class:`dif.Image` from an image (or ``.drawio``) file.
 
     A ``.drawio`` input is first rendered to a PNG under ``out/drawio-png/``
     (keeping ``testdata/`` clean) and then loaded like any raster image.
     """
+    path = resolve_raster(path)
+    arr, is_gray, depth_bits = load_image(path)
+    return dif_image_from_array(arr, is_gray, depth_bits, strategy)
+
+
+def dif_image_from_array(
+    arr: np.ndarray, is_gray: bool, depth_bits: int, strategy: str = "arithmetic"
+) -> "dif.Image":
+    """Build a :class:`dif.Image` from an already-loaded raster array.
+
+    Splits the in-memory build (palette/index + dark-theme synthesis) from disk
+    I/O so callers that already hold the pixels — e.g. the format benchmark —
+    can time *raw bitmap -> file* without re-reading the source. ``strategy``
+    ``"keep"`` stores a single (light) theme; any other adds the dark theme.
+    """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
-    path = Path(path)
-    if path.suffix.lower() == ".drawio":
-        from .drawio import render_drawio_to_png
-
-        png = _DRAWIO_PNG_CACHE / (path.stem + ".png")
-        path = Path(render_drawio_to_png(path, png))
-    arr, is_gray, depth_bits = load_image(path)
     max_value = (1 << depth_bits) - 1
 
     if is_gray:
@@ -74,17 +103,19 @@ def image_to_dif_image(path: str | Path, strategy: str = "arithmetic") -> "dif.I
         return dif.Image.grayscale(w, h, depth_bits, themes, luts, [samples])
 
     h, w = arr.shape[:2]
-    flat = arr.reshape(-1, 4)
-    colors, inverse = np.unique(flat, axis=0, return_inverse=True)
-    inverse = inverse.reshape(-1)
-    themes = [(0, "light")]
-    palettes = [_to_palette(colors)]
+    # Hand the raw RGBA8 buffer to Rust: the palette dedup + per-pixel index
+    # build happen natively (like png_encode(arr)), instead of running
+    # `np.unique` over millions of pixels in Python and marshalling an index
+    # list across PyO3 — that pixel work was ~99% of DIF encode time.
+    rgba = np.ascontiguousarray(arr[..., :4], dtype=np.uint8).tobytes()
+    img = dif.Image.indexed_from_rgba8(w, h, depth_bits, rgba)
     if strategy != "keep":
-        dark = derive_palette(colors.astype(np.int64), strategy, max_value)
-        themes.append((1, "dark"))
-        palettes.append(_to_palette(dark))
-    frames = [inverse.astype(np.int64).tolist()]
-    return dif.Image.indexed(w, h, depth_bits, themes, palettes, frames)
+        # The dark theme is derived in Python from the (small) light palette,
+        # then appended; only the palette crosses the boundary, not pixels.
+        light = np.array(img.palette(0), dtype=np.int64)
+        dark = derive_palette(light, strategy, max_value)
+        img.add_indexed_theme(1, "dark", _to_palette(dark))
+    return img
 
 
 def _to_palette(colors: np.ndarray) -> list[tuple[int, int, int, int]]:

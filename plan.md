@@ -110,6 +110,30 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 
 ### Evaluation
 - [x] Speed bench vs existing codecs — `bench/compare.py`
+- [x] `bench formats`: per-DIF-codec rows, `.drawio` support (+ render cache),
+  live pipe-table stream, markdown report + per-(image,format) TSV
+- [x] Encode timed *raw bitmap → file* (build in the timed region; parity with
+  `png_encode(arr)`); other formats at library-default effort (avif `speed=6`,
+  jxl `effort=7`, webp default)
+- [x] **DIF encode build bottleneck fixed** — moved pixel processing into Rust
+  (`dif_core::indexed_from_rgba8`, `std`-gated `HashMap` dedup) exposed via
+  `dif.Image.indexed_from_rgba8(w,h,depth,rgba_bytes)` + `palette()` /
+  `add_indexed_theme()`. Python now hands the raw RGBA8 buffer to native code
+  (like `png_encode(arr)`) instead of running `np.unique` over millions of
+  pixels and marshalling a per-pixel index list across PyO3. Dark theme still
+  derived in Python from the small light palette, then appended.
+  Encode **4.8 → ~410 MB/s** (zstd-3/lz4/lzav), now *faster than png*; codec
+  ranking clean (brotli-11 the lone slow one). Intermediate numpy fix (pack
+  RGBA8→u32, 1-D `np.unique`, ~7× over `axis=0`) is superseded.
+- [ ] **Refactor (later)** — native-build follow-ups:
+  - Grayscale path still marshals `samples` via `.tolist()` → add a native
+    `grayscale_from_samples` mirroring `indexed_from_rgba8`.
+  - `dif.Image.indexed(...)` list constructor now redundant for the converter
+    (only the native path is used); keep for tests or consolidate.
+  - `_load` / `_to_palette` duplicated across `bench/compare.py` and
+    `dif_tools/convert.py` — dedupe.
+  - Dark-theme OKLCh derivation stays in Python; port to Rust only if 2-theme
+    encode speed (~210 MB/s vs ~410) becomes a target.
 - [ ] Size comparison vs png / lossless jxl / webp / avif
 - [ ] Theme-matching change demo captured
 - [ ] Encode/decode speed vs gif/png/jxl/webp/avif written up
@@ -129,3 +153,7 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Format **v2**: header gained a `level:u8` byte after `codec:u8`; added codec ids `Lz4=5` / `Lzav=6` (new `crates/lzav-shim` C shim); dropped XZ (id 3 reserved). Threaded the 7 chosen variant strings through `dif-py` + `bench formats` (`--dif-codecs`); no-arg default → `zstd-3`. Transcoded `web/flowchart.dif` v1→v2.
 - **2026-05-31** — Wasm decoder now reads **all 7 codecs in-browser**: `cargo-zigbuild` (+ `ziglang` from uv) cross-compiles the C codecs (zstd, lzav) to **`wasm32-wasip1`** so wasi-libc supplies `malloc`/headers; `web/wasi_shim.js` + an import map stub the 4 unused wasi imports. `just setup-wasm` / `wasm` recipes. Verified headless (node) byte-identical to native.
 - **2026-05-31** — Reworked the `arithmetic` dark-theme derivation: achromatic colors flip (`L'=1-L`, white↔black for the background) while chromatic colors keep hue and are tone-compressed into the dark band (so light high-chroma colors like yellow stay a visible muted gold instead of crushing to near-black), then **sRGB gamut-mapped** (OKLCh chroma reduction, not a hard clip). P3/Rec.2020 targets scaffolded but WIP (`NotImplementedError`). Cache-busted the demo `.dif` fetch.
+- **2026-05-31** — `bench formats` overhaul. Fixed `.drawio` (it went through `load_image`/PIL directly and crashed — only the DIF row survived): extracted `resolve_raster()` (drawio→PNG with mtime cache reuse, shared by converter + bench) so every format encoder sees the same raster. Output now mirrors `bench codecs`: per-image progress line, live fixed-width **pipe table** (per-format rows stream as measured), GitHub-md report (`--report`) + per-(image,format) **TSV** (`--out`). Per-DIF-codec rows already existed (`--dif-codecs`).
+- **2026-05-31** — Made `bench formats` encode honest: timed **raw bitmap → file** (moved the palette/index + dark-theme build into the timed closure via new `dif_image_from_array(arr, …)`, starting from the in-memory array — parity with `png_encode(arr)`, no file I/O timed). Table layout: one **2-theme** headline row (`dif-zstd-3-2t`, the shipped light+dark `.dif`) + **single-theme** codec rows (apples-to-apples with the single-image formats). Other formats pinned to library defaults (avif `speed=6` — imagecodecs otherwise leaves aom at speed 0 ≈0.3 MB/s; jxl `effort=7`; webp default). imagecodecs 2026.5.10 bundles aom-only (no svt/rav1e); system/pyproject installs aren't picked up.
+- **2026-05-31** — Found the DIF **encode build bottleneck**: all codecs floor at ~4.8 MB/s. First suspected `.tolist()`/PyO3 marshalling, but the split showed `np.unique(flat, axis=0)` (lexsort over 2.4M RGBA rows) was ~99% (≈1.9 s); `.tolist()`+PyO3 only ~60 ms. `bench codecs` (over the `.difr` body) remains the codec-speed source of truth.
+- **2026-05-31** — Killed the bottleneck by moving pixel work to Rust: new `dif_core::indexed_from_rgba8` (`std`-gated `HashMap<u32,u32>` dedup in one pass) + `dif.Image.indexed_from_rgba8` / `palette()` / `add_indexed_theme()`. `dif_image_from_array` now passes the raw RGBA8 buffer to native code (parity with `png_encode(arr)`); the dark theme is derived in Python from the small light palette and appended. Encode **4.8 → ~410 MB/s** (zstd-3/lz4/lzav) — faster than png; codec ranking clean (brotli-11 alone slow at 7.5 MB/s). Grayscale path still uses `.tolist()`; logged refactor TODOs in the checklist.

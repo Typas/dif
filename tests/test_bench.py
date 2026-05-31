@@ -31,7 +31,7 @@ def test_codecs_registry_roundtrips():
 def test_speed_helpers_positive():
     data = b"x" * 100_000
     assert memcpy_speed(data, repeats=2) > 0
-    assert speed(lambda: bytes(data), len(data), repeats=2) > 0
+    assert speed(lambda: bytes(data), len(data), repeats=2)[0] > 0
 
 
 def _toy_png(path):

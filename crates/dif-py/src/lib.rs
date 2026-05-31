@@ -4,8 +4,8 @@
 //! [`Image`] to encode to `.dif`/`.difr`, decode back, and render a theme.
 
 use dif_core::{
-    from_dif, from_difr, to_dif, to_difr, CodecId, Content, DifError, DifImage, ModeTag, Rgba,
-    SampleDepth, Theme,
+    from_dif, from_difr, indexed_from_rgba8, to_dif, to_difr, CodecId, Content, DifError, DifImage,
+    ModeTag, Rgba, SampleDepth, Theme,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -111,6 +111,58 @@ impl Image {
         };
         inner.validate().map_err(map_err)?;
         Ok(Image { inner })
+    }
+
+    /// Build a single-theme (light) indexed image straight from a packed RGBA8
+    /// buffer (`4 * width * height` bytes). The palette dedup + index build run
+    /// in Rust, so Python hands over the raw bitmap (like `png_encode(arr)`)
+    /// instead of marshalling a per-pixel index list across the FFI boundary.
+    /// Add a derived dark theme afterwards with [`Image::add_indexed_theme`].
+    #[staticmethod]
+    #[pyo3(signature = (width, height, depth_bits, rgba))]
+    fn indexed_from_rgba8(
+        width: u32,
+        height: u32,
+        depth_bits: u32,
+        rgba: &[u8],
+    ) -> PyResult<Image> {
+        let inner =
+            indexed_from_rgba8(width, height, depth(depth_bits)?, rgba).map_err(map_err)?;
+        Ok(Image { inner })
+    }
+
+    /// One theme's palette as `(r, g, b, a)` tuples (small — cheap to marshal).
+    /// Lets Python derive a dark palette from the Rust-built light one.
+    fn palette(&self, theme: usize) -> PyResult<Vec<(u16, u16, u16, u16)>> {
+        match &self.inner.content {
+            Content::Indexed { palettes, .. } => {
+                let p = palettes
+                    .get(theme)
+                    .ok_or_else(|| PyValueError::new_err("theme index out of range"))?;
+                Ok(p.iter().map(|c| (c.r, c.g, c.b, c.a)).collect())
+            }
+            _ => Err(PyValueError::new_err("not an indexed image")),
+        }
+    }
+
+    /// Append a theme and its palette (same length as the existing palettes).
+    /// Used to attach the Python-derived dark theme to a Rust-built light image.
+    fn add_indexed_theme(
+        &mut self,
+        tag: u8,
+        name: String,
+        palette: Vec<(u16, u16, u16, u16)>,
+    ) -> PyResult<()> {
+        let theme = Theme { tag: ModeTag::from_u8(tag).map_err(map_err)?, name };
+        match &mut self.inner.content {
+            Content::Indexed { palettes, .. } => {
+                palettes.push(palette.into_iter().map(|(r, g, b, a)| Rgba::new(r, g, b, a)).collect());
+            }
+            _ => return Err(PyValueError::new_err("not an indexed image")),
+        }
+        self.inner.themes.push(theme);
+        self.inner.validate().map_err(map_err)?;
+        Ok(())
     }
 
     /// Build a grayscale image.

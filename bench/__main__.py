@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 
 from . import native
+from . import compare as cmp
 from .compare import DIF_CODECS, compare_image
-from .compare import format_table as compare_table
 from .runner import (
     TSV_HEADER,
     format_stats_table,
@@ -81,6 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         help="DIF codec variants to compare (default: all 7)",
     )
     f.add_argument(
+        "--out",
+        default="bench-formats.tsv",
+        help="per-(image,format) results as TSV (default: bench-formats.tsv)",
+    )
+    f.add_argument(
         "--report",
         default="bench-formats.md",
         help="comparison report (default: bench-formats.md)",
@@ -123,14 +128,22 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
-        with open(args.report, "w", newline="") as rp:
-            for p in imgs:
-                table = compare_table(
-                    p, compare_image(p, args.repeats, args.dif_codecs)
-                )
-                print(table)
+        print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
+        with (
+            open(args.report, "w", newline="") as rp,
+            open(args.out, "w", newline="") as fh,
+        ):
+            w = csv.writer(fh, delimiter="\t")
+            w.writerow(cmp.TSV_HEADER)
+            count = len(imgs)
+            for i, p in enumerate(imgs):
+                print(f"Benchmarking {p} ({i + 1}/{count}):")
+                # stream=True prints each format's row live (like bench codecs);
+                # markdown + TSV go to the report files.
+                rows = compare_image(p, args.repeats, args.dif_codecs, stream=True)
                 print()
-                rp.write(f"{table}\n\n")
+                rp.write(f"{cmp.markdown_table(p, rows)}\n\n")
+                w.writerows(cmp.iter_rows(p, rows))
     return 0
 
 

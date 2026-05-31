@@ -237,3 +237,60 @@ impl DifImage {
         Ok(out)
     }
 }
+
+/// Build a single-theme (light) indexed image straight from a packed RGBA8
+/// buffer (`4 * width * height` bytes, row-major). Dedups colors into a palette
+/// and emits the index frame in one native pass, so callers (e.g. the Python
+/// binding) keep the per-pixel work in Rust instead of marshalling a million-
+/// element index list across the FFI boundary. Add further themes (e.g. a
+/// derived dark palette) afterwards. `std`-only — it uses `HashMap`.
+#[cfg(feature = "std")]
+pub fn indexed_from_rgba8(
+    width: u32,
+    height: u32,
+    depth: SampleDepth,
+    rgba: &[u8],
+) -> Result<DifImage> {
+    use std::collections::HashMap;
+    let px = width as usize * height as usize;
+    if rgba.len() != px * 4 {
+        return Err(DifError::Invalid("rgba length != 4*width*height"));
+    }
+    let mut map: HashMap<u32, u32> = HashMap::new();
+    let mut palette: Vec<Rgba> = Vec::new();
+    let mut frame: Vec<u32> = Vec::with_capacity(px);
+    for chunk in rgba.chunks_exact(4) {
+        let key = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let id = match map.get(&key) {
+            Some(&i) => i,
+            None => {
+                let i = palette.len() as u32;
+                palette.push(Rgba::new(
+                    chunk[0] as u16,
+                    chunk[1] as u16,
+                    chunk[2] as u16,
+                    chunk[3] as u16,
+                ));
+                map.insert(key, i);
+                i
+            }
+        };
+        frame.push(id);
+    }
+    let palettes: Vec<Vec<Rgba>> = alloc::vec![palette];
+    let frames: Vec<Vec<u32>> = alloc::vec![frame];
+    let themes: Vec<Theme> = alloc::vec![Theme {
+        tag: ModeTag::Light,
+        name: String::from("light"),
+    }];
+    let img = DifImage {
+        width,
+        height,
+        depth,
+        themes,
+        content: Content::Indexed { palettes, frames },
+        frame_delays: Vec::new(),
+    };
+    img.validate()?;
+    Ok(img)
+}

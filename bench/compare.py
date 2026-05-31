@@ -18,7 +18,7 @@ import imagecodecs
 import numpy as np
 from PIL import Image as PILImage
 
-from dif_tools import image_to_dif_image, load_image
+from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import speed
 
@@ -47,10 +47,10 @@ class FormatResult:
     note: str = ""
 
 
-def _load(path: str | Path) -> tuple[np.ndarray, bool]:
+def _load(path: str | Path) -> tuple[np.ndarray, bool, int]:
     arr, is_gray, depth = load_image(path)
     arr = arr.astype(np.uint8) if depth == 8 else arr.astype(np.uint16)
-    return arr, is_gray
+    return arr, is_gray, depth
 
 
 def _as_rgb(arr: np.ndarray, is_gray: bool) -> np.ndarray:
@@ -87,66 +87,77 @@ def compare_image(
     path: str | Path,
     repeats: int = 3,
     dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
+    stream: bool = False,
 ) -> list[FormatResult]:
-    arr, is_gray = _load(path)
+    # Render `.drawio` to PNG once; every format encoder then sees the same
+    # raster (PIL/imagecodecs can't open the drawio XML directly).
+    raster = resolve_raster(path)
+    arr, is_gray, depth = _load(raster)
     rgb = _as_rgb(arr, is_gray)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
+    dif_size: int | None = None  # running baseline for the live `rel` column
 
-    img = image_to_dif_image(path, "arithmetic")
+    if stream:
+        print(_HEAD)
+        print(_SEP)
+
+    def emit(name: str, enc, dec, expected):
+        """Measure one format, then print its row live (mirrors bench_image)."""
+        nonlocal dif_size
+        r = _measure(name, enc, dec, expected, nbytes, repeats)
+        # The single-theme baseline variant sets the running `rel` reference;
+        # the final table re-derives it via _baseline_size (prefers zstd-3).
+        if dif_size is None and r.available and name == f"dif-{DIF_BASELINE}":
+            dif_size = r.size
+        rows.append(r)
+        if stream:
+            print(_row_line(r, dif_size))
+
+    # DIF encode is timed *raw bitmap -> file*: the palette/index build AND the
+    # dark-theme synthesis run inside the closure (parity with png_encode(arr),
+    # which encodes the raw array). `arr` is already in memory, so no file I/O
+    # is timed. `decode` renders one theme back to pixels (file -> bitmap).
+    def dif_enc(strategy: str, codec: str):
+        return lambda: dif_image_from_array(arr, is_gray, depth, strategy).to_dif(
+            cast("dif.CodecName", codec)
+        )
+
+    def dif_dec(b: bytes):
+        return dif.Image.from_dif(b).render("light", 0)[2]
+
+    # Headline row: the shipped default (zstd-3) carrying *both* themes
+    # (light + dark) — the real `.dif` product, not directly size-comparable to
+    # the single-image formats below.
+    emit(f"dif-{DIF_BASELINE}-2t", dif_enc("arithmetic", DIF_BASELINE), dif_dec, None)
+
+    # Codec comparison: one theme each, apples-to-apples with the single-image
+    # formats (png/gif/webp/jxl/avif). DIF losslessness is covered in tests.
     for codec in dif_codecs:
-        rows.append(
-            _measure(
-                f"dif-{codec}",
-                # default arg binds `codec` per iteration (avoids late binding);
-                # `codec` is a runtime str, narrow to the typed alias.
-                lambda c=codec: img.to_dif(cast("dif.CodecName", c)),
-                lambda b: dif.Image.from_dif(b).render("light", 0)[2],
-                None,  # DIF losslessness is verified in tests/test_convert.py
-                nbytes,
-                repeats,
-            )
-        )
+        emit(f"dif-{codec}", dif_enc("keep", codec), dif_dec, None)
 
-    rows.append(
-        _measure(
-            "png",
-            lambda: imagecodecs.png_encode(arr),
-            imagecodecs.png_decode,
-            arr,
-            nbytes,
-            repeats,
-        )
+    # avif/jxl pinned to their library's *native default* effort knob so the
+    # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs
+    # leaves avif speed unset -> aom runs at speed 0, ~0.3 MB/s; we pin the
+    # documented default instead.) webp keeps its own default.
+    emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
+    emit(
+        "webp-ll",
+        lambda: imagecodecs.webp_encode(rgb, lossless=True),
+        imagecodecs.webp_decode,
+        rgb,
     )
-    rows.append(
-        _measure(
-            "webp-ll",
-            lambda: imagecodecs.webp_encode(rgb, lossless=True),
-            imagecodecs.webp_decode,
-            rgb,
-            nbytes,
-            repeats,
-        )
+    emit(
+        "jxl-ll",
+        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7),
+        imagecodecs.jpegxl_decode,
+        arr,
     )
-    rows.append(
-        _measure(
-            "jxl-ll",
-            lambda: imagecodecs.jpegxl_encode(arr, lossless=True),
-            imagecodecs.jpegxl_decode,
-            arr,
-            nbytes,
-            repeats,
-        )
-    )
-    rows.append(
-        _measure(
-            "avif-ll",
-            lambda: imagecodecs.avif_encode(rgb, level=100, pixelformat="yuv444"),
-            imagecodecs.avif_decode,
-            rgb,
-            nbytes,
-            repeats,
-        )
+    emit(
+        "avif-ll",
+        lambda: imagecodecs.avif_encode(rgb, level=100, pixelformat="yuv444", speed=6),
+        imagecodecs.avif_decode,
+        rgb,
     )
 
     # GIF via Pillow (palette; lossless only for <=256 colors).
@@ -161,30 +172,109 @@ def compare_image(
         out = PILImage.open(io.BytesIO(b))
         return np.asarray(out.convert("L") if is_gray else out.convert("RGB"))
 
-    rows.append(
-        _measure("gif", gif_enc, gif_dec, arr if is_gray else rgb, nbytes, repeats)
-    )
+    emit("gif", gif_enc, gif_dec, arr if is_gray else rgb)
     return rows
 
 
-def format_table(path: str | Path, rows: list[FormatResult]) -> str:
-    head = f"{'format':<16}{'size':>10}{'enc MB/s':>10}{'dec MB/s':>10}{'rel':>7}  note"
-    lines = [f"# {Path(path).name}", head, "-" * len(head)]
-    # `rel` is measured against the baseline DIF variant; fall back to the first
-    # available dif-* row if the baseline wasn't part of this run.
+def _baseline_size(rows: list[FormatResult]) -> int | None:
+    """The DIF size every other format's ``rel`` is measured against: the
+    baseline variant, else the first available ``dif-*`` row in this run."""
     baseline = f"dif-{DIF_BASELINE}"
-    dif_size = next((r.size for r in rows if r.name == baseline and r.available), None)
-    if dif_size is None:
-        dif_size = next(
+    size = next((r.size for r in rows if r.name == baseline and r.available), None)
+    if size is None:
+        size = next(
             (r.size for r in rows if r.name.startswith("dif-") and r.available), None
         )
+    return size
+
+
+# Fixed-width pipe-table layout matching bench/runner.py's `bench_image` console
+# output. Shared by the live stream and the final table so the two are identical.
+_FMT_W = 16
+_SIZE_W = 10
+_SPD_W = 12
+_REL_W = 6
+_NOTE_W = 6
+_HEAD = (
+    f"| {'format':^{_FMT_W}} | {'size':^{_SIZE_W}} | {'enc MB/s':^{_SPD_W}} "
+    f"| {'dec MB/s':^{_SPD_W}} | {'rel':^{_REL_W}} | {'note':^{_NOTE_W}} |"
+)
+_SEP = (
+    f"|{'-' * (_FMT_W + 2)}|{'-' * (_SIZE_W + 2)}|{'-' * (_SPD_W + 2)}"
+    f"|{'-' * (_SPD_W + 2)}|{'-' * (_REL_W + 2)}|{'-' * (_NOTE_W + 2)}|"
+)
+
+
+def _row_line(r: FormatResult, dif_size: int | None) -> str:
+    if not r.available:
+        return (
+            f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
+            f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {r.note:^{_NOTE_W}} |"
+        )
+    rel = f"x{r.size / dif_size:.2f}" if dif_size else ""
+    tag = "" if r.lossless else "LOSSY"
+    return (
+        f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {tag:^{_NOTE_W}} |"
+    )
+
+
+def format_table(path: str | Path, rows: list[FormatResult]) -> str:
+    lines = [_HEAD, _SEP]
+    dif_size = _baseline_size(rows)
+    lines.extend(_row_line(r, dif_size) for r in rows)
+    return "\n".join(lines)
+
+
+def markdown_table(path: str | Path, rows: list[FormatResult]) -> str:
+    """The same comparison as a GitHub-flavored markdown table (for reports)."""
+    dif_size = _baseline_size(rows)
+    out = [
+        f"### {Path(path).name}",
+        "",
+        "| format | size | enc MB/s | dec MB/s | rel | note |",
+        "|---|--:|--:|--:|--:|---|",
+    ]
     for r in rows:
         if not r.available:
-            lines.append(f"{r.name:<16}{'n/a':>10}{'':>10}{'':>10}{'':>7}  {r.note}")
+            out.append(f"| {r.name} | n/a |  |  |  | {r.note} |")
             continue
         rel = f"x{r.size / dif_size:.2f}" if dif_size else ""
         tag = "" if r.lossless else "LOSSY"
-        lines.append(
-            f"{r.name:<16}{r.size:>10}{r.enc_mbps:>10.1f}{r.dec_mbps:>10.1f}{rel:>7}  {tag}"
+        out.append(
+            f"| {r.name} | {r.size} | {r.enc_mbps:.1f} | {r.dec_mbps:.1f} "
+            f"| {rel} | {tag} |"
         )
-    return "\n".join(lines)
+    return "\n".join(out)
+
+
+TSV_HEADER = (
+    "image",
+    "format",
+    "size",
+    "enc_mbps",
+    "dec_mbps",
+    "rel",
+    "lossless",
+    "available",
+    "note",
+)
+
+
+def iter_rows(path: str | Path, rows: list[FormatResult]):
+    """One flat row per (image, format) for CSV/TSV export."""
+    name = Path(path).name
+    dif_size = _baseline_size(rows)
+    for r in rows:
+        rel = f"{r.size / dif_size:.4f}" if (dif_size and r.available) else ""
+        yield (
+            name,
+            r.name,
+            r.size if r.available else "",
+            f"{r.enc_mbps:.2f}" if r.available else "",
+            f"{r.dec_mbps:.2f}" if r.available else "",
+            rel,
+            int(r.lossless),
+            int(r.available),
+            r.note,
+        )
