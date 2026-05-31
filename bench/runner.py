@@ -207,9 +207,8 @@ def format_table(results: list[CodecResult]) -> str:
 
 TSV_HEADER = (
     "image",
-    "difr_bytes",
-    "memcpy_mbps",
     "codec",
+    "bytes",
     "ratio_s",
     "comp_mbps",
     "decomp_mbps",
@@ -222,14 +221,35 @@ TSV_HEADER = (
 
 
 def iter_rows(reports: Sequence[ImageReport]):
-    """Yield one flat row per (image, codec) for CSV/TSV export."""
+    """Yield flat rows for CSV/TSV export.
+
+    Per image: a ``memcpy`` baseline row (``bytes`` = the raw ``.difr`` size,
+    speeds = memcpy), then one row per codec whose ``bytes`` is the *compressed*
+    size — so the single ``bytes`` column shows the size difference directly.
+    The old per-row ``difr_bytes``/``memcpy_mbps`` columns are gone (they were
+    constant per image and folded into the memcpy row).
+    """
+    base = f"{compute_m(1, 1, 1):.4f}"
     for rep in reports:
+        yield (
+            rep.path,
+            "memcpy",
+            rep.difr_bytes,
+            "1.0000",
+            f"{rep.memcpy_mbps:.2f}",
+            f"{rep.memcpy_mbps:.2f}",
+            "1.00",
+            "1.00",
+            base,
+            1,
+            "",
+        )
         for r in rep.results:
+            comp_bytes = round(rep.difr_bytes / r.ratio_s) if r.ratio_s > 0 else ""
             yield (
                 rep.path,
-                rep.difr_bytes,
-                f"{rep.memcpy_mbps:.1f}",
                 r.name,
+                comp_bytes,
                 f"{r.ratio_s:.4f}",
                 f"{r.comp_mbps:.2f}",
                 f"{r.decomp_mbps:.2f}",

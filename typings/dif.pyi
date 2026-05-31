@@ -42,6 +42,22 @@ class Image:
         delays: list[int] | None = ...,
     ) -> Image: ...
     @staticmethod
+    def indexed_from_rgba8(
+        width: int, height: int, depth_bits: int, rgba: bytes
+    ) -> Image:
+        """Build a single-theme (light) indexed image from a packed RGBA8 buffer
+        (`4 * width * height` bytes). Palette dedup + index build run natively."""
+        ...
+
+    def palette(self, theme: int) -> list[Rgba]:
+        """One theme's palette as `(r, g, b, a)` tuples."""
+        ...
+
+    def add_indexed_theme(self, tag: int, name: str, palette: list[Rgba]) -> None:
+        """Append a theme and its palette (same length as existing palettes)."""
+        ...
+
+    @staticmethod
     def grayscale(
         width: int,
         height: int,

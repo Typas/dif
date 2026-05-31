@@ -9,6 +9,10 @@ the lossless check are marked ``LOSSY`` so the size comparison stays honest.
 from __future__ import annotations
 
 import io
+import os
+import statistics
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -226,28 +230,6 @@ def format_table(path: str | Path, rows: list[FormatResult]) -> str:
     return "\n".join(lines)
 
 
-def markdown_table(path: str | Path, rows: list[FormatResult]) -> str:
-    """The same comparison as a GitHub-flavored markdown table (for reports)."""
-    dif_size = _baseline_size(rows)
-    out = [
-        f"### {Path(path).name}",
-        "",
-        "| format | size | enc MB/s | dec MB/s | rel | note |",
-        "|---|--:|--:|--:|--:|---|",
-    ]
-    for r in rows:
-        if not r.available:
-            out.append(f"| {r.name} | n/a |  |  |  | {r.note} |")
-            continue
-        rel = f"x{r.size / dif_size:.2f}" if dif_size else ""
-        tag = "" if r.lossless else "LOSSY"
-        out.append(
-            f"| {r.name} | {r.size} | {r.enc_mbps:.1f} | {r.dec_mbps:.1f} "
-            f"| {rel} | {tag} |"
-        )
-    return "\n".join(out)
-
-
 TSV_HEADER = (
     "image",
     "format",
@@ -278,3 +260,92 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
             int(r.available),
             r.note,
         )
+
+
+# --- Aggregate stats (mirrors bench/runner.py's DirStat / subdir_stats) ------
+# One row per image is detail (console + TSV); the report aggregates every
+# format over all images beneath each directory, recursively.
+
+# (path, rows) for one image — the unit aggregation buckets over.
+ImageRows = tuple[str, list[FormatResult]]
+
+
+@dataclass
+class FormatStat:
+    """One format aggregated over every image under a directory."""
+
+    name: str
+    n: int
+    size_mean: float
+    enc_mbps: float
+    dec_mbps: float
+    rel_mean: float
+    lossless: bool
+    note: str = ""
+
+
+def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
+    by_fmt: dict[str, list[tuple[FormatResult, float | None]]] = defaultdict(list)
+    for _path, rows in reports:
+        dif_size = _baseline_size(rows)
+        for r in rows:
+            if r.available:
+                by_fmt[r.name].append((r, dif_size))
+    stats: list[FormatStat] = []
+    for name, items in by_fmt.items():
+        rs = [r for r, _ in items]
+        rels = [r.size / d for r, d in items if d]
+        stats.append(
+            FormatStat(
+                name,
+                len(rs),
+                statistics.mean(r.size for r in rs),
+                statistics.mean(r.enc_mbps for r in rs),
+                statistics.mean(r.dec_mbps for r in rs),
+                statistics.mean(rels) if rels else float("nan"),
+                all(r.lossless for r in rs),
+                rs[-1].note,
+            )
+        )
+    # DIF baseline first, then ascending mean size (smaller = better).
+    stats.sort(key=lambda s: (not s.name.startswith("dif-"), s.size_mean))
+    return stats
+
+
+def subdir_stats(reports: Sequence[ImageRows]) -> list[tuple[str, list[FormatStat]]]:
+    """Aggregate per directory, recursively: every ancestor dir (down to the
+    common root of the inputs) gets a stat block over all images beneath it.
+    Returned outermost-first. Same shape as ``runner.subdir_stats``."""
+    if not reports:
+        return []
+    paths = [Path(p).resolve() for p, _ in reports]
+    root = Path(os.path.commonpath([str(p.parent) for p in paths]))
+    buckets: dict[Path, list[ImageRows]] = defaultdict(list)
+    for rep, p in zip(reports, paths):
+        d = p.parent
+        while True:
+            buckets[d].append(rep)
+            if d == root:
+                break
+            d = d.parent
+    base = root.parent  # root shows by name, children as root/sub
+    out: list[tuple[str, list[FormatStat]]] = []
+    for d in sorted(buckets, key=lambda p: (len(p.parts), str(p))):
+        out.append((os.path.relpath(d, base), _aggregate(buckets[d])))
+    return out
+
+
+def format_stats_table(stats: list[FormatStat]) -> str:
+    """Aggregate block as a GitHub-flavored markdown table."""
+    rows = [
+        "| format | n | size | enc MB/s | dec MB/s | rel | lossless | note |",
+        "|---|--:|--:|--:|--:|--:|:--:|---|",
+    ]
+    for s in stats:
+        rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
+        ll = "yes" if s.lossless else "LOSSY"
+        rows.append(
+            f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
+            f"| {s.dec_mbps:.1f} | {rel} | {ll} | {s.note} |"
+        )
+    return "\n".join(rows)

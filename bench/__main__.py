@@ -129,21 +129,29 @@ def main(argv: list[str] | None = None) -> int:
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
         print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
-        with (
-            open(args.report, "w", newline="") as rp,
-            open(args.out, "w", newline="") as fh,
-        ):
+        reports: list[cmp.ImageRows] = []
+        # Per-image detail streams to the console and the TSV; the report gets
+        # the aggregate (mirrors `bench codecs`).
+        with open(args.out, "w", newline="") as fh:
             w = csv.writer(fh, delimiter="\t")
             w.writerow(cmp.TSV_HEADER)
             count = len(imgs)
             for i, p in enumerate(imgs):
                 print(f"Benchmarking {p} ({i + 1}/{count}):")
-                # stream=True prints each format's row live (like bench codecs);
-                # markdown + TSV go to the report files.
                 rows = compare_image(p, args.repeats, args.dif_codecs, stream=True)
                 print()
-                rp.write(f"{cmp.markdown_table(p, rows)}\n\n")
                 w.writerows(cmp.iter_rows(p, rows))
+                reports.append((p, rows))
+
+        # Aggregate per directory, recursively (markdown tables) -> report.
+        with open(args.report, "w", newline="") as rp:
+            for label, stats in cmp.subdir_stats(reports):
+                title = f"### {label}/  (formats aggregated over images beneath)"
+                table = cmp.format_stats_table(stats)
+                print(title)
+                print(table)
+                print()
+                rp.write(f"{title}\n\n{table}\n\n")
     return 0
 
 
