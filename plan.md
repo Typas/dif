@@ -80,6 +80,7 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - [x] Color themes / named palette
 - [x] Frame model (APNG/GIF-style)
 - [x] Format spec — `spec/dif-spec.typ`
+- [x] Codec `level` byte + 7 variant ids (lz4 + lzav), XZ dropped — format v2
 - [ ] Spec finalized & matches implementation (cross-check pending)
 
 ### Compression study
@@ -96,10 +97,13 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - [x] General image → `.dif` — `dif_tools/convert.py`
 - [x] `.difr` raw (uncompressed) path
 - [x] Colorspace / themes — `dif_tools/colorspace.py`, `dif_tools/themes.py`
+- [x] Dark-theme derivation: achromatic flip + chromatic tone-compress + sRGB gamut map
+- [ ] P3 / Rec.2020 gamut targets (sRGB done; needs a format color-space tag + wide-gamut canvas)
 - [x] Python binding — `crates/dif-py/`
 
 ### Decode & display
 - [x] Wasm decoder — `crates/dif-wasm/`
+- [x] Wasm decodes all 7 codecs in-browser (zig cross-compile, `wasm32-wasip1`)
 - [x] Browser respects theme — `web/`
 - [x] VS Codium extension — `extension/` (`extension.ts`, `viewer.js`)
 - [ ] Extension theme/mode live-switch verified end-to-end
@@ -122,3 +126,6 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Metric reweighted to `4*log(S) - log(C)/2 - log(D)`; candidate list + chosen/eliminated recorded; verified against `bench-codecs.tsv`. Fixed stale formula docstring in `bench/metric.py`.
 - **2026-05-31** — Fixed report writer (`bench/__main__.py`): title/table separation + open file once outside loop (was truncating to last subdir only).
 - **2026-05-31** — Re-evaluated codec decision across diagram vs photo workloads. Confirmed metric is workload-sensitive (ratio term dominates → photos go negative, off target). Chosen set holds for the diagram target; `brotli-5` > `zstd-22` at equal ratio (≈69× faster compress); `lzav-1` / `lz4-fast1` robust across both.
+- **2026-05-31** — Format **v2**: header gained a `level:u8` byte after `codec:u8`; added codec ids `Lz4=5` / `Lzav=6` (new `crates/lzav-shim` C shim); dropped XZ (id 3 reserved). Threaded the 7 chosen variant strings through `dif-py` + `bench formats` (`--dif-codecs`); no-arg default → `zstd-3`. Transcoded `web/flowchart.dif` v1→v2.
+- **2026-05-31** — Wasm decoder now reads **all 7 codecs in-browser**: `cargo-zigbuild` (+ `ziglang` from uv) cross-compiles the C codecs (zstd, lzav) to **`wasm32-wasip1`** so wasi-libc supplies `malloc`/headers; `web/wasi_shim.js` + an import map stub the 4 unused wasi imports. `just setup-wasm` / `wasm` recipes. Verified headless (node) byte-identical to native.
+- **2026-05-31** — Reworked the `arithmetic` dark-theme derivation: achromatic colors flip (`L'=1-L`, white↔black for the background) while chromatic colors keep hue and are tone-compressed into the dark band (so light high-chroma colors like yellow stay a visible muted gold instead of crushing to near-black), then **sRGB gamut-mapped** (OKLCh chroma reduction, not a hard clip). P3/Rec.2020 targets scaffolded but WIP (`NotImplementedError`). Cache-busted the demo `.dif` fetch.
