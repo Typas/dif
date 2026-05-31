@@ -16,7 +16,7 @@
 #align(center)[
   #text(17pt, weight: "bold")[DIF — The Diagram Image Format]
   #v(2pt)
-  #text(11pt)[Specification v1 · ADSP final project]
+  #text(11pt)[Specification v2 · ADSP final project]
 ]
 
 #outline(depth: 2, indent: auto)
@@ -155,44 +155,36 @@ allocator is always required; a `no_std` host must install a `#[global_allocator
   [6], [LZAV], [`lzav-shim` (C)], [`native`], [`wasm-native`],
 )
 
-XZ is interoperable across libraries: a `.dif` encoded by liblzma (`xz2`) decodes
-correctly with the pure-Rust `lzma-rust2` reader used in wasm, and vice versa.
-
 == Codec benchmark and the $M$ metric
 
 To choose a codec, candidates are measured over the `.difr` body against a
 `memcpy` baseline:
 
-$ M = log(5 S \/ 4) - log(C \/ 4) - log(D) $
+$ M = 4 log(S) - log(C) \/ 2 - log(D) $
 
 where $S = "size"_"orig" \/ "size"_"comp"$ (ratio, higher better),
 $C = "memcpy"_"speed" \/ "compress"_"speed"$, and
 $D = "memcpy"_"speed" \/ "decompress"_"speed"$ (both slowdowns, lower better).
 Higher $M$ is better. Candidates: libdeflate L6 (baseline), Brotli 5/11,
 bzip3 @bzip3, kanzi 1/2 @kanzi, lz4hc 4/9 and lz4 fast @lz4, lzav @lzav,
-zstd fast/3/22 @zstd. kanzi and lzav are written in C/C++ and exposed to the
+zstd fast/3/10/22 @zstd. kanzi and lzav are written in C/C++ and exposed to the
 Python harness as `ctypes` C-ABI shared libraries (kanzi via the Rust crate
 `crates/kanzi-shim` wrapping kanzi-cpp's C API).
 
 = Evaluation
 
 Lossless size and speed are compared against PNG, lossless JXL/WebP/AVIF and GIF
-via `imagecodecs`. On true flat-color diagrams — the target use case — DIF wins
-decisively; for example an 800×600, 5-color flowchart:
+via `imagecodecs` (`bench formats`). Sizes are reported relative to PNG and
+aggregated over a diagram and a photo corpus; full per-format tables live in the
+repository (`docs/bench-formats-mt.md`).
 
-#table(
-  columns: (auto, auto, auto),
-  table.header([*format*], [*size (bytes)*], [*relative*]),
-  [DIF (brotli)], [233], [×1.00],
-  [WebP lossless], [256], [×1.10],
-  [JXL lossless], [388], [×1.67],
-  [AVIF lossless], [721], [×3.09],
-  [PNG], [3498], [×15.0],
-  [GIF], [5313], [×22.8],
-)
-
-On anti-aliased or photographic images DIF trails PNG/WebP/JXL, since v1 stores
-the index stream without spatial prediction; this is the natural next extension.
+On true flat-color diagrams — the target use case — DIF is highly competitive:
+its `brotli`-compressed body lands around ×0.47 of PNG, beating JXL (≈×0.59) and
+AVIF (≈×1.18) and edging GIF (≈×0.47, but GIF is lossy above 256 colors).
+Lossless WebP is the one consistently smaller competitor (≈×0.32), so closing
+that gap — DIF stores the index stream without spatial prediction — is the
+natural next extension. On anti-aliased or photographic images that same
+prediction-free design makes DIF trail PNG/WebP/JXL outright.
 
 = Implementation map
 
