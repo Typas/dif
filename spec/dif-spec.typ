@@ -114,9 +114,15 @@ Three strategies (the source theme is always the lossless identity):
 / keep: alternate theme identical to the source (theme-agnostic).
 / invert: photographic negative, $"out" = max - "value"$ per channel (grayscale:
   $max - "sample"$).
-/ arithmetic: perceptual lightness inversion in OKLab @oklab — convert
-  sRGB→linear→OKLab, set $L' = 1 - L$, convert back — preserving hue and chroma.
-  Grayscale uses the same transform per LUT level.
+/ arithmetic: perceptual dark-theme derivation in OKLab @oklab. Convert
+  sRGB→linear→OKLab. *Achromatic* colors (chroma $approx 0$ — backgrounds,
+  gridlines) flip lightness, $L' = 1 - L$, so a white canvas becomes black.
+  *Chromatic* colors keep their hue and are tone-compressed into the dark band
+  ($L' = L\/2$ for $L < 0.5$, else $L\/2 + 0.25$) rather than inverted, so a
+  light high-chroma color (e.g. yellow) lands as a visible muted version instead
+  of being crushed to near-black. The result is gamut-mapped into the display
+  gamut (reduce OKLCh chroma at fixed lightness/hue until in gamut). The
+  grayscale LUT is the achromatic case ($L' = 1 - L$ per level).
 
 = Compression codecs <codecs>
 

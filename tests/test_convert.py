@@ -109,10 +109,22 @@ def test_invert_palette_is_negative():
 
 
 def test_arithmetic_lightness_inverts_extremes():
+    # Achromatic colors flip fully: black -> light, white -> dark.
     colors = np.array([[0, 0, 0, 255], [255, 255, 255, 255]], np.int64)
     out = derive_palette(colors, "arithmetic", 255)
     assert out[0, :3].mean() > 200  # black -> light
     assert out[1, :3].mean() < 55  # white -> dark
+
+
+def test_arithmetic_chromatic_stays_visible():
+    # A light high-chroma color (yellow) must NOT crush to near-black; it keeps
+    # its hue and lands at a visible mid lightness. Alpha is untouched.
+    out = derive_palette(np.array([[253, 216, 53, 200]], np.int64), "arithmetic", 255)[
+        0
+    ]
+    assert out[:3].max() > 120  # visible, not near-black
+    assert out[0] > out[2] and out[1] > out[2]  # still warm: R,G > B
+    assert out[3] == 200  # alpha preserved
 
 
 def test_invert_lut():
