@@ -8,14 +8,16 @@ default:
 # --- Rust core (dif-core) -------------------------------------------------
 
 # Build the no_std+alloc default (store/deflate/lz4); clean build = portability check.
-build:
-    cargo build -p dif-core
+# `profile`: dev (default) | release | dev-release. `dev-release` = optimized +
+# debug info, the profile dif-py compiles dif-core under. e.g. `just build release`.
+build profile="dev":
+    cargo build -p dif-core --profile {{profile}}
 
-build-std:
-    cargo build -p dif-core --features std
+build-std profile="dev":
+    cargo build -p dif-core --features std --profile {{profile}}
 
-build-native:
-    cargo build -p dif-core --features native
+build-native profile="dev":
+    cargo build -p dif-core --features native --profile {{profile}}
 
 # Assert the portable core stays no_std (alias for the default build).
 check-nostd: build
@@ -154,3 +156,16 @@ spec:
 # fmt-check/clippy are opt-in: the repo doesn't keep dif-core rustfmt-clean.
 ci: test-all spec
     @echo "core + spec OK"
+
+# --- Cleanup --------------------------------------------------------------
+
+# `dif` is uninstalled from the uv project env (`.venv`) only — `uv pip` never
+# touches system pip. Leaves tracked sources (extension/media/viewer.js) and
+# deps (node_modules).
+# Remove build artifacts: cargo target, staged wasm + TS output, vsix, py caches, dif module.
+clean:
+    cargo clean
+    -uv pip uninstall dif
+    rm -rf web/pkg extension/media/pkg extension/out .pytest_cache
+    rm -rf dif_tools/__pycache__ bench/__pycache__ tests/__pycache__
+    rm -f extension/media/wasi_shim.js dif-viewer.vsix
