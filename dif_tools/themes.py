@@ -23,6 +23,8 @@ so no palette crosses the FFI boundary.
 
 from __future__ import annotations
 
+from typing import cast
+
 import dif
 import numpy as np
 
@@ -33,13 +35,13 @@ def derive_palette(colors: np.ndarray, strategy: str, max_value: int) -> np.ndar
     """Map an ``(N, 4)`` RGBA palette (ints ``0..max_value``) to the dark theme."""
     colors = np.asarray(colors)
     pal = [(int(c[0]), int(c[1]), int(c[2]), int(c[3])) for c in colors]
-    dark = dif.derive_dark_palette(pal, strategy, max_value)
+    dark = dif.derive_dark_palette(pal, cast("dif.Strategy", strategy), max_value)
     return np.asarray(dark, dtype=colors.dtype)
 
 
 def derive_lut(strategy: str, max_value: int) -> list[int]:
     """Build the dark-theme grayscale LUT over ``0..=max_value``."""
-    return list(dif.derive_dark_lut(strategy, max_value))
+    return list(dif.derive_dark_lut(cast("dif.Strategy", strategy), max_value))
 
 
 def identity_lut(max_value: int) -> list[int]:

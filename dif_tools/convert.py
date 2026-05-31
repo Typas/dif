@@ -112,7 +112,8 @@ def dif_image_from_array(
     # LUT) runs in Rust off the small light theme, so no palette/LUT crosses the
     # FFI boundary. `"keep"` leaves the image single-theme.
     if strategy != "keep":
-        img.add_dark_theme(strategy)
+        # `strategy` is a runtime str (argparse-validated); narrow to the alias.
+        img.add_dark_theme(cast("dif.Strategy", strategy))
     return img
 
 
