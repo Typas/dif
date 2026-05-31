@@ -81,7 +81,17 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - [x] Frame model (APNG/GIF-style)
 - [x] Format spec — `spec/dif-spec.typ`
 - [x] Codec `level` byte + 7 variant ids (lz4 + lzav), XZ dropped — format v2
-- [ ] Spec finalized & matches implementation (cross-check pending)
+- [x] Spec **structure** cross-checked against the v2 implementation —
+  `spec/dif-spec.typ`: relabelled v1→**v2**; fixed the `M` formula to
+  `4·log(S) − log(C)/2 − log(D)` (matched `bench/metric.py`); deleted the stale
+  XZ cross-library-interop paragraph (XZ removed, id 3 reserved); candidate list
+  `zstd fast/3/10/22`. Header/body/varint/codec-table verified against
+  `format.rs` + `codec.rs`.
+- [x] Spec **Evaluation table dropped** — the hand-picked 800×600 flowchart table
+  (DIF 233 B, `rel` normalized to DIF) was stale vs the 245 B v2 demo and
+  optimistic (it showed DIF beating WebP). Replaced with prose citing the
+  PNG-relative aggregate (`docs/bench-formats-mt.md`): DIF `brotli` ≈×0.47 of PNG
+  on diagrams (beats JXL/AVIF/GIF), WebP-ll ≈×0.32 the one smaller competitor.
 
 ### Compression study
 - [x] Codec benchmark harness — `bench/`
@@ -106,7 +116,15 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - [x] Wasm decodes all 7 codecs in-browser (zig cross-compile, `wasm32-wasip1`)
 - [x] Browser respects theme — `web/`
 - [x] VS Codium extension — `extension/` (`extension.ts`, `viewer.js`)
-- [ ] Extension theme/mode live-switch verified end-to-end
+- [x] Extension wasm fixed + build recipes — the committed bundle was a stale
+  pre-`wasm-native` wasm-pack build (pure-Rust only, **couldn't decode the
+  default zstd-3 `.dif`**). New `just ext-build` reuses the zig/wasip1 decoder
+  from `just wasm` (all 7 codecs) + wires `wasi_shim.js` into the webview
+  (import map + CSP `cspSource`); `just ext-package` emits a `.vsix` (GUI-install
+  in VS Code / VSCodium / Cursor). Dropped the broken `build:wasm` npm script.
+  `just ext-build && ext-package` verified clean (`.vsix` 200 KB, 513 KB bundle).
+- [x] Extension theme/mode live-switch verified end-to-end — confirmed in
+  VSCodium: the `.dif` custom editor opens and re-themes with the editor mode.
 
 ### Evaluation
 - [x] Speed bench vs existing codecs — `bench/compare.py`
@@ -181,3 +199,5 @@ For the existing codecs, use the existing library. Do not reinvent the wheel.
 - **2026-05-31** — Closed the refactor TODOs. (1) **Native grayscale** `dif_core::grayscale_from_samples` (alloc-only, LE-u16) + `dif.Image.grayscale_from_samples`; Python hands the raw sample buffer, no `.tolist()` — gray encode off the ~5 MB/s floor to ~500 MB/s single-theme. (2) **Dark-theme OKLCh derivation ported to Rust** (`crates/dif-core/src/derive.rs`) using the **`palette` 0.7.6** crate (f64, so it reproduces the numpy reference — invert exact, arithmetic within the pinned thresholds). New `derive` feature (`= std + palette`) folded into `native`; **excluded from `wasm-native`** so the browser decoder pulls no `palette` (verified via `cargo tree`). Converter now calls `Image.add_dark_theme(strategy)` (derives + appends entirely native — no palette/LUT crosses PyO3); `themes.py` `derive_palette`/`derive_lut` became thin wrappers over module fns `dif.derive_dark_palette`/`derive_dark_lut`, and `colorspace.py` was deleted (single source of truth in Rust). 2-theme encode **~210 → ~418 MB/s** (parity with single-theme ~472, still > png). (3) Deduped `_load`  <!-- early-out below pushed 2-theme higher --> — `load_image` returns the natural dtype (gray-8 → uint8), `bench/compare.py` uses it directly; `_to_palette` gone. `indexed`/`grayscale` list ctors kept for `test_codec.py`. Verified: `cargo test --features native` (20, +5 derive), `clippy --all-features` clean, `pytest` 34 green.
 - **2026-05-31** — Dark-derive gamut **early-out**: skip the 25-iter OKLCh chroma search when the color already fits sRGB (every gray/achromatic color + most tone-compressed ones). Output byte-identical (the in-gamut branch already converged to `k=1`); removed the two dead binding methods `Image.palette`/`add_indexed_theme` (+ stub). 2-theme encode: **grayscale 142 → ~464 MB/s** (256-entry LUT is all in-gamut, search fully skipped), **diagram 417 → ~459** (vs ~481 single-theme). Confirmed the observation that 2-theme size-diff and speed-diff both scale with palette size N (extra stored palette ∝ N, derivation cost ∝ N).
 - **2026-05-31** — Closed an **unverified mt path**. `bench formats` drives the rust multithreaded encode (`to_dif_workers` → zstd `NbWorkers` / brotli `compress_multi`) for its `-mt` rows but never checks the decode matches the input — every dif row passes `expected=None`, so `lossless` is hardcoded `True`. `bench codecs` has the roundtrip check (`decomp != raw`) but had no mt. Added `bench.codecs.dif_codecs(numthreads)`: rust-`dif`-backed codecs that compress the `.difr` body through the real `.dif` container and decode back, so the mt encode path is exercised **and** roundtrip-verified by the existing check. Empty unless `--numthreads > 1` (default run unchanged); each codec yields a single-thread reference (`dif-{c}`) + worker variant (`dif-{c}-mt`) so the worker size delta shows side by side. Verified one image per dir (tiff + drawio, `--numthreads 4`): all `dif-*`/`-mt` rows `ok=1`; zstd delta ≈0 (body too small to split), brotli moves a little either way — matches the `codec.rs` comments. Moved `plan.md` + `plan-format-codecs.md` to `docs/`; `*.tsv` now tracked via git-LFS.
+- **2026-05-31** — **Extension wasm fix + build recipes.** The committed `extension/media/pkg` was a stale pre-`wasm-native` wasm-pack bundle (225 KB, pure-Rust store/deflate/brotli/lz4) that **could not decode the format's default zstd-3 `.dif`** — and `package.json`'s `build:wasm` (wasm-pack on wasm32-unknown-unknown) can no longer build dif-wasm at all, since it now pulls the C codecs. Added `just ext-build` (reuses the zig/wasip1 decoder from `just wasm` — all 7 codecs — stages it + `wasi_shim.js` into `media/`, `pnpm install`, `tsc`) and `just ext-package` (`@vscode/vsce` → `.vsix`, GUI-installable in VS Code / VSCodium / Cursor). Wired the wasi shim into the webview (`extension.ts`: import map + CSP `cspSource`, mirroring `web/`), dropped the dead `build:wasm` script, added `extension/README.md` + `.gitignore` (the staged bundle/shim/`out`/`.vsix` are generated, sources are `crates/dif-wasm` + `web/wasi_shim.js`). New bundle 525 KB, carries `zstd`/`lzav`, byte-identical to `web/pkg`. Live theme-switch verified in VSCodium.
+- **2026-05-31** — **Spec structural cross-check** (`spec/dif-spec.typ`). Relabelled v1→**v2**; corrected the `M` formula to `4·log(S) − log(C)/2 − log(D)` (was the superseded `log(5S/4) − log(C/4) − log(D)`; now matches `bench/metric.py`); deleted the stale paragraph claiming XZ cross-library interop (XZ removed in v2, id 3 reserved — the text contradicted the codec table); candidate list `zstd fast/3/10/22`; dropped a lingering "v1" in the evaluation note. Header/body/varint/codec-table re-verified against `format.rs` + `codec.rs`; `typst compile` clean. **Held back** the "spec final" claim: the Evaluation example table (DIF 233 B, `rel` normalized to it) is stale vs the 245 B v2 demo — needs regenerated all-format numbers first.

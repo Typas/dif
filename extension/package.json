@@ -20,9 +20,7 @@
   },
   "packageManager": "pnpm@10.20.0",
   "scripts": {
-    "build:wasm": "wasm-pack build ../crates/dif-wasm --target web --out-dir \"$PWD/media/pkg\"",
-    "compile": "tsc -p ./",
-    "build": "pnpm run build:wasm && pnpm run compile"
+    "compile": "tsc -p ./"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

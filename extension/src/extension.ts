@@ -74,10 +74,18 @@ class DifEditorProvider implements vscode.CustomReadonlyEditorProvider {
     const pkgJs = uri("pkg", "dif_wasm.js");
     const wasm = uri("pkg", "dif_wasm_bg.wasm");
     const viewer = uri("viewer.js");
+    // The decoder is built for wasm32-wasip1 (so the C codecs zstd/lzav get
+    // wasi-libc's malloc); its JS glue imports `wasi_snapshot_preview1`. An
+    // import map resolves that bare specifier to a no-op shim — the decode path
+    // does no I/O, so nothing in it runs (mirrors web/index.html).
+    const wasiShim = uri("wasi_shim.js");
     const n = nonce();
+    // Module imports (the dynamic `import(pkg)` + the import-map shim) load from
+    // the webview origin, so script-src must allow `cspSource` alongside the
+    // nonce that covers the inline scripts.
     const csp =
       `default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; ` +
-      `script-src 'nonce-${n}' 'wasm-unsafe-eval'; connect-src ${webview.cspSource};`;
+      `script-src 'nonce-${n}' 'wasm-unsafe-eval' ${webview.cspSource}; connect-src ${webview.cspSource};`;
     return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -94,6 +102,9 @@ class DifEditorProvider implements vscode.CustomReadonlyEditorProvider {
     <pre id="err"></pre>
     <script nonce="${n}">
       window.__DIF = { b64: "${b64}", pkg: "${pkgJs}", wasm: "${wasm}" };
+    </script>
+    <script type="importmap" nonce="${n}">
+      { "imports": { "wasi_snapshot_preview1": "${wasiShim}" } }
     </script>
     <script nonce="${n}" type="module" src="${viewer}"></script>
   </body>

@@ -73,6 +73,25 @@ wasm:
 regen-demo:
     uv run python web/regen_flowchart.py
 
+# --- VSCodium / VS Code extension -----------------------------------------
+# The extension reuses the wasip1 decoder built by `just wasm` (all 7 codecs)
+# plus its wasi shim, so the custom editor decodes the same files the browser
+# demo does — including the default zstd-3 `.dif`. `build:wasm` (wasm-pack) is
+# gone: dif-wasm pulls the C codecs, which only build through the zig/wasip1 path.
+
+# Build the extension: stage the wasm decoder + shim into media/, then compile TS.
+ext-build: wasm
+    rm -rf extension/media/pkg
+    cp -r web/pkg extension/media/pkg
+    cp web/wasi_shim.js extension/media/wasi_shim.js
+    pnpm --dir extension install
+    pnpm --dir extension run compile
+
+# Package a .vsix. Install it via the editor GUI (Extensions > Install from VSIX),
+# which works in VS Code / VSCodium / Cursor / any VS Code-family editor.
+ext-package: ext-build
+    cd extension && pnpm dlx @vscode/vsce package --no-dependencies
+
 # --- drawio rendering (local container) ------------------------------------
 # rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
 # run one-shot per file. Fully local, no diagrams.net. dif_tools.drawio drives

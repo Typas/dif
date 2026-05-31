@@ -1,0 +1,6 @@
+# Build artifacts staged by `just ext-build` / `ext-package`.
+# Sources of truth: crates/dif-wasm (decoder), web/wasi_shim.js (shim).
+/media/pkg/
+/media/wasi_shim.js
+/out/
+*.vsix
