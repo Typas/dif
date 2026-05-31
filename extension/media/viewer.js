@@ -20,7 +20,19 @@ async function run() {
   canvas.height = img.height;
   const ctx = canvas.getContext("2d");
 
-  let kind = "light";
+  // VS Code tags <body> with the active theme class before any script runs, so
+  // read it synchronously and render the right DIF theme on the first frame
+  // instead of drawing "light" then swapping when the extension replies. Both HC
+  // kinds carry vscode-high-contrast -> tag 2; a file lacking the requested tag
+  // falls back to theme 0 (per spec).
+  function detectKind() {
+    const c = document.body.classList;
+    if (c.contains("vscode-high-contrast")) return "high-contrast";
+    if (c.contains("vscode-dark")) return "dark";
+    return "light";
+  }
+
+  let kind = detectKind();
   function draw() {
     const rgba = img.render(kind, 0);
     const data = new ImageData(new Uint8ClampedArray(rgba), img.width, img.height);
@@ -29,7 +41,7 @@ async function run() {
 
   window.addEventListener("message", (e) => {
     const msg = e.data;
-    if (msg && msg.type === "theme") {
+    if (msg && msg.type === "theme" && msg.kind !== kind) {
       kind = msg.kind;
       draw();
     }

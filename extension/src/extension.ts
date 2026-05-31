@@ -20,7 +20,7 @@ function themeKindString(kind: vscode.ColorThemeKind): string {
     case vscode.ColorThemeKind.HighContrast:
       return "high-contrast";
     case vscode.ColorThemeKind.HighContrastLight:
-      return "light";
+      return "high-contrast";
     default:
       return "light";
   }
@@ -92,7 +92,7 @@ class DifEditorProvider implements vscode.CustomReadonlyEditorProvider {
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
     <style>
-      body { margin: 0; display: grid; place-items: center; height: 100vh; }
+      body { margin: 0; display: grid; place-items: center; height: 100vh; background: var(--vscode-editor-background); }
       canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
       #err { color: var(--vscode-errorForeground); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; }
     </style>
