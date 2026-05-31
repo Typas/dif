@@ -60,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--strategy", default="arithmetic")
     c.add_argument("--repeats", type=int, default=5)
     c.add_argument(
+        "--numthreads",
+        type=int,
+        default=1,
+        help="codec threads (default 1). >1 adds rust dif-{codec}/-mt rows that "
+        "probe and roundtrip-verify the multithreaded .dif encode path",
+    )
+    c.add_argument(
         "--out",
         default="bench-codecs.tsv",
         help="per-image results written here as TSV (default: bench-codecs.tsv)",
@@ -112,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.cmd == "codecs":
-        reports = run(imgs, args.strategy, args.repeats)
+        reports = run(imgs, args.strategy, args.repeats, args.numthreads)
 
         # Per-image rows -> TSV (machine-parseable detail).
         with open(args.out, "w", newline="") as fh:

@@ -141,6 +141,50 @@ for _c in _native.codecs():
     _add(_c)
 
 
+# Codecs whose Rust encoder has a multithreaded path (zstd `NbWorkers`, brotli
+# `compress_multi`); the dif-py extension is built with the `native` feature, so
+# both are live. `dif_codecs()` probes them through the *real* `.dif` container
+# (the same `to_dif_workers` path `bench formats` uses) so their roundtrip is
+# verified by the harness — `bench formats` never checks it.
+DIF_MT_CODECS: tuple[str, ...] = (
+    "zstd-3",
+    "zstd-10",
+    "zstd-22",
+    "brotli-5",
+    "brotli-11",
+)
+
+
+def dif_codecs(numthreads: int = 1) -> list[Codec]:
+    """Rust-`dif`-backed codecs that compress the ``.difr`` body via the actual
+    ``.dif`` container, so the multithreaded encode path is exercised *and*
+    roundtrip-checked (decode -> re-serialize must reproduce the input bytes).
+
+    Empty unless ``numthreads > 1`` — a default ``bench codecs`` run is
+    unchanged. When enabled, each codec yields a single-thread reference
+    (``dif-{c}``) and a worker variant (``dif-{c}-mt``) so the size delta the
+    workers introduce is visible side by side."""
+    if numthreads <= 1:
+        return []
+    try:
+        import dif  # the built extension; only needed for the -mt probe
+    except ImportError:  # pragma: no cover
+        return [_unavailable("dif-mt", "dif extension not built (maturin)")]
+
+    def _enc(codec: str, workers: int):
+        # raw is `.difr` bytes -> rebuild the image -> encode the `.dif` container.
+        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(codec, workers))
+
+    def _dec(comp: bytes, _n: int) -> bytes:
+        return bytes(dif.Image.from_dif(comp).to_difr())
+
+    out: list[Codec] = []
+    for codec in DIF_MT_CODECS:
+        out.append(Codec(f"dif-{codec}", _enc(codec, 0), _dec))
+        out.append(Codec(f"dif-{codec}-mt", _enc(codec, numthreads), _dec))
+    return out
+
+
 def all_codecs() -> list[Codec]:
     return list(_REGISTRY)
 

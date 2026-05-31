@@ -16,7 +16,7 @@ from pathlib import Path
 
 from dif_tools import image_to_dif_image
 
-from .codecs import all_codecs
+from .codecs import all_codecs, dif_codecs
 from .metric import compute_m, memcpy_speed, speed
 
 
@@ -59,7 +59,9 @@ class DirStat:
     note: str = ""
 
 
-def bench_image(path: str, raw: bytes, repeats: int = 5) -> ImageReport:
+def bench_image(
+    path: str, raw: bytes, repeats: int = 5, numthreads: int = 1
+) -> ImageReport:
     codec_w = 12
     ratio_w = 7
     speed_w = 14
@@ -76,7 +78,9 @@ def bench_image(path: str, raw: bytes, repeats: int = 5) -> ImageReport:
         f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} |"
     )
     results: list[CodecResult] = []
-    for codec in all_codecs():
+    # `dif_codecs(numthreads)` is empty unless numthreads > 1, when it adds the
+    # rust `.dif` multithread-encode probe (verified by the roundtrip check below).
+    for codec in all_codecs() + dif_codecs(numthreads):
         if not codec.available:
             print(f"-- WARN: {codec.name} is not available, skipped")
             results.append(
@@ -122,14 +126,17 @@ def bench_image(path: str, raw: bytes, repeats: int = 5) -> ImageReport:
 
 
 def run(
-    paths: Sequence[str | Path], strategy: str = "arithmetic", repeats: int = 5
+    paths: Sequence[str | Path],
+    strategy: str = "arithmetic",
+    repeats: int = 5,
+    numthreads: int = 1,
 ) -> list[ImageReport]:
     reports: list[ImageReport] = []
     count = len(paths)
     for i, p in enumerate(paths):
         print(f"Benchmarking {p} ({i + 1}/{count}):")
         raw = image_to_dif_image(p, strategy=strategy).to_difr()
-        reports.append(bench_image(str(p), raw, repeats))
+        reports.append(bench_image(str(p), raw, repeats, numthreads))
     return reports
 
 
