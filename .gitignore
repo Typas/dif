@@ -26,6 +26,7 @@ spec/*.pdf
 !testdata/**/*.dif
 !testdata/**/*.difr
 !web/*.dif
+!dif-examples/**/*.dif
 
 # Generated artifacts (rendered PNGs, converted files, bench scratch)
 /out/
