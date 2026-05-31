@@ -6,7 +6,9 @@ const DIF_URL = "./flowchart.dif";
 async function main() {
   await init();
 
-  const resp = await fetch(DIF_URL);
+  // Cache-bust: the dev server sends no Cache-Control, so a bare URL gets
+  // served from the browser cache even across hard reloads.
+  const resp = await fetch(`${DIF_URL}?t=${Date.now()}`);
   if (!resp.ok) throw new Error(`failed to fetch ${DIF_URL}: ${resp.status}`);
   const bytes = new Uint8Array(await resp.arrayBuffer());
   const img = Image.fromBytes(bytes);
