@@ -2,6 +2,15 @@
 
 Date: 2026-06-01
 
+## Status
+
+- [x] Two-pass frequency-ordered build of `indexed_from_rgba8`
+- [x] Deterministic tie-break (ascending packed key)
+- [x] `std` `HashMap` / default-build `alloc::BTreeMap` fallback (drops std-only gate)
+- [x] Tests: frequency order, tie-break, pixel reconstruction
+- [x] Verified: `just test` (16), `just test-native` (23), no_std `just build`, `just pytest` (34)
+- [ ] V3: per-frame subpalette (GIF local color table)
+
 ## Problem
 
 Indexed encoding currently assigns palette indices by **first-appearance order**.
