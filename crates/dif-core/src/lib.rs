@@ -254,43 +254,62 @@ impl DifImage {
 
 /// Build a single-theme (light) indexed image straight from a packed RGBA8
 /// buffer (`4 * width * height` bytes, row-major). Dedups colors into a palette
-/// and emits the index frame in one native pass, so callers (e.g. the Python
-/// binding) keep the per-pixel work in Rust instead of marshalling a million-
-/// element index list across the FFI boundary. Add further themes (e.g. a
-/// derived dark palette) afterwards. `std`-only — it uses `HashMap`.
-#[cfg(feature = "std")]
+/// and emits the index frame natively, so callers (e.g. the Python binding) keep
+/// the per-pixel work in Rust instead of marshalling a million-element index list
+/// across the FFI boundary. Add further themes (e.g. a derived dark palette)
+/// afterwards.
+///
+/// The palette is ordered by **descending color frequency** (ties broken by
+/// ascending packed RGBA key, so output bytes are reproducible): the hottest
+/// colors get the lowest indices and therefore the shortest varints in the index
+/// stream (`0..=127` -> 1 byte), which shrinks the body on images with more than
+/// 128 distinct colors. This costs a second pass over the pixels. Decode is
+/// unaffected — palette order carries no semantics.
 pub fn indexed_from_rgba8(
     width: u32,
     height: u32,
     depth: SampleDepth,
     rgba: &[u8],
 ) -> Result<DifImage> {
-    use std::collections::HashMap;
+    // `HashMap` under `std`; fall back to alloc's `BTreeMap` on the default
+    // `no_std` build. Iteration order differs, but the explicit sort below makes
+    // the final palette order identical (and deterministic) either way.
+    #[cfg(feature = "std")]
+    use std::collections::HashMap as ColorMap;
+    #[cfg(not(feature = "std"))]
+    use alloc::collections::BTreeMap as ColorMap;
+
     let px = width as usize * height as usize;
     if rgba.len() != px * 4 {
         return Err(DifError::Invalid("rgba length != 4*width*height"));
     }
-    let mut map: HashMap<u32, u32> = HashMap::new();
-    let mut palette: Vec<Rgba> = Vec::new();
+
+    // Pass 1: tally how often each packed color occurs.
+    let mut map: ColorMap<u32, u32> = ColorMap::new();
+    for chunk in rgba.chunks_exact(4) {
+        let key = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        *map.entry(key).or_insert(0) += 1;
+    }
+
+    // Order colors by frequency (desc), tie-break by key (asc) for determinism.
+    let mut order: Vec<(u32, u32)> = map.iter().map(|(&k, &c)| (k, c)).collect();
+    order.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Materialize the palette and repurpose `map` as color -> final index.
+    let mut palette: Vec<Rgba> = Vec::with_capacity(order.len());
+    for (idx, (key, _)) in order.iter().enumerate() {
+        let b = key.to_le_bytes();
+        palette.push(Rgba::new(b[0] as u16, b[1] as u16, b[2] as u16, b[3] as u16));
+        map.insert(*key, idx as u32);
+    }
+
+    // Pass 2: emit the index frame against the frequency-ordered palette.
     let mut frame: Vec<u32> = Vec::with_capacity(px);
     for chunk in rgba.chunks_exact(4) {
         let key = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        let id = match map.get(&key) {
-            Some(&i) => i,
-            None => {
-                let i = palette.len() as u32;
-                palette.push(Rgba::new(
-                    chunk[0] as u16,
-                    chunk[1] as u16,
-                    chunk[2] as u16,
-                    chunk[3] as u16,
-                ));
-                map.insert(key, i);
-                i
-            }
-        };
-        frame.push(id);
+        frame.push(map[&key]);
     }
+
     let palettes: Vec<Vec<Rgba>> = alloc::vec![palette];
     let frames: Vec<Vec<u32>> = alloc::vec![frame];
     let themes: Vec<Theme> = alloc::vec![Theme {
@@ -349,4 +368,74 @@ pub fn grayscale_from_samples(
     };
     img.validate()?;
     Ok(img)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Content, Rgba, SampleDepth};
+
+    fn indexed_parts(img: &DifImage) -> (&Vec<Rgba>, &Vec<u32>) {
+        match &img.content {
+            Content::Indexed { palettes, frames } => (&palettes[0], &frames[0]),
+            _ => panic!("expected indexed content"),
+        }
+    }
+
+    // Color A is used 3x, B 1x, but B is the FIRST pixel. First-appearance order
+    // (the old behavior) would put B at index 0; frequency order must put the
+    // hotter color A at index 0.
+    #[test]
+    fn palette_ordered_by_frequency_not_first_seen() {
+        let a = [10u8, 20, 30, 255];
+        let b = [200u8, 100, 50, 255];
+        // Pixel order: B, A, A, A
+        let rgba: Vec<u8> = [b, a, a, a].concat();
+        let img = indexed_from_rgba8(2, 2, SampleDepth::Eight, &rgba).unwrap();
+        let (palette, frame) = indexed_parts(&img);
+
+        assert_eq!(palette[0], Rgba::new(10, 20, 30, 255), "hottest color first");
+        assert_eq!(palette[1], Rgba::new(200, 100, 50, 255));
+        assert_eq!(frame, &alloc::vec![1u32, 0, 0, 0], "indices reference freq palette");
+    }
+
+    // Equal counts must break ties by ascending packed key, so output is
+    // deterministic regardless of pixel order or the backing map type.
+    #[test]
+    fn equal_frequency_breaks_ties_by_key() {
+        let lo = [0u8, 0, 0, 255]; // packed key 0xFF00_0000
+        let hi = [1u8, 0, 0, 255]; // packed key 0xFF00_0001 (larger)
+                                   // Higher-key color appears first; counts are equal (1 each).
+        let rgba: Vec<u8> = [hi, lo].concat();
+        let img = indexed_from_rgba8(2, 1, SampleDepth::Eight, &rgba).unwrap();
+        let (palette, frame) = indexed_parts(&img);
+
+        assert_eq!(palette[0], Rgba::new(0, 0, 0, 255), "lower key wins the tie");
+        assert_eq!(palette[1], Rgba::new(1, 0, 0, 255));
+        assert_eq!(frame, &alloc::vec![1u32, 0]);
+    }
+
+    // palette[frame[i]] must reproduce the original pixel for every pixel.
+    #[test]
+    fn frame_reconstructs_original_pixels() {
+        let px: [[u8; 4]; 5] = [
+            [9, 9, 9, 255],
+            [9, 9, 9, 255],
+            [200, 0, 0, 128],
+            [9, 9, 9, 255],
+            [200, 0, 0, 128],
+        ];
+        let rgba: Vec<u8> = px.iter().flatten().copied().collect();
+        let img = indexed_from_rgba8(5, 1, SampleDepth::Eight, &rgba).unwrap();
+        let (palette, frame) = indexed_parts(&img);
+
+        for (i, want) in px.iter().enumerate() {
+            let got = palette[frame[i] as usize];
+            assert_eq!(
+                got,
+                Rgba::new(want[0] as u16, want[1] as u16, want[2] as u16, want[3] as u16),
+                "pixel {i} round-trips",
+            );
+        }
+    }
 }
