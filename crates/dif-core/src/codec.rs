@@ -144,11 +144,16 @@ fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 // change. The cross-chunk window break costs a little ratio. Pays off on the slow
 // high-quality levels (brotli-11) where encode is CPU-bound. `workers` <= 1 (or
 // the feature off) keeps the single-thread `CompressorWriter`, byte-unchanged.
+//
+// Gated to `level >= 10`: brotli ships two encoders — the fast q0–9 path and the
+// full q10–11 path — and `compress_multi` only drives the full one, so feeding it
+// a low quality OOB-panics (brotli_bit_stream.rs). q0–9 is cheap anyway, so MT
+// buys nothing there; fall through to the single-thread writer.
 #[cfg(feature = "std")]
 #[cfg_attr(not(feature = "brotli-mt"), allow(unused_variables))]
 fn brotli_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
     #[cfg(feature = "brotli-mt")]
-    if workers > 1 {
+    if workers > 1 && level >= 10 {
         return brotli_compress_mt(data, level, workers);
     }
     use std::io::Write as _;

@@ -146,11 +146,14 @@ for _c in _native.codecs():
 # both are live. `dif_codecs()` probes them through the *real* `.dif` container
 # (the same `to_dif_workers` path `bench formats` uses) so their roundtrip is
 # verified by the harness — `bench formats` never checks it.
+#
+# Only brotli-11 is MT'd: `compress_multi` drives brotli's full (q10–11) encoder
+# only, so the core gates the worker path to `level >= 10` (codec.rs) and brotli-5
+# falls back to single-thread — a `brotli-5-mt` row would just duplicate `brotli-5`.
 DIF_MT_CODECS: tuple[str, ...] = (
     "zstd-3",
     "zstd-10",
     "zstd-22",
-    "brotli-5",
     "brotli-11",
 )
 
