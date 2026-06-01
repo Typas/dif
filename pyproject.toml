@@ -25,6 +25,7 @@ dev = [
     # Cross-compile the wasm decoder's C codec deps (lzav, zstd) via zig cc.
     # Pulls `ziglang` (the zig binary wheel) automatically, so no system zig.
     "cargo-zigbuild>=0.21",
+    "matplotlib>=3.9",
 ]
 
 # Virtual project: deps only, nothing to build here. The `dif` extension is
