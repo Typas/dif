@@ -271,11 +271,12 @@ pub fn indexed_from_rgba8(
     depth: SampleDepth,
     rgba: &[u8],
 ) -> Result<DifImage> {
-    // `HashMap` under `std`; fall back to alloc's `BTreeMap` on the default
-    // `no_std` build. Iteration order differs, but the explicit sort below makes
-    // the final palette order identical (and deterministic) either way.
+    // FxHash `HashMap` under `std` (the integer key makes SipHash pure overhead);
+    // fall back to alloc's `BTreeMap` on the default `no_std` build. Iteration
+    // order differs, but the explicit sort below makes the final palette order
+    // identical (and deterministic) either way.
     #[cfg(feature = "std")]
-    use std::collections::HashMap as ColorMap;
+    use rustc_hash::FxHashMap as ColorMap;
     #[cfg(not(feature = "std"))]
     use alloc::collections::BTreeMap as ColorMap;
 
@@ -285,7 +286,7 @@ pub fn indexed_from_rgba8(
     }
 
     // Pass 1: tally how often each packed color occurs.
-    let mut map: ColorMap<u32, u32> = ColorMap::new();
+    let mut map: ColorMap<u32, u32> = ColorMap::default();
     for chunk in rgba.chunks_exact(4) {
         let key = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         *map.entry(key).or_insert(0) += 1;

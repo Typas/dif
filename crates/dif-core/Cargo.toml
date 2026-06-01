@@ -16,6 +16,11 @@ lz4_flex = { version = "0.11", default-features = false }
 # Brotli needs std (its streaming Reader/Writer API); gated behind the `std` feature.
 brotli = { version = "8", optional = true }
 
+# Fast integer hasher (FxHash) for the std palette-dedup map. std's default
+# SipHash is DoS-hardened but ~20-40ns per small-key op; FxHash is a single
+# multiply+rotate. Pulled in with `std`; the no_std path uses BTreeMap instead.
+rustc-hash = { version = "2", optional = true }
+
 # Native (C-linked) codecs; imply std and are off in no_std / wasm builds.
 zstd-safe = { version = "7.2", optional = true }
 # libdeflate encoder (standard DEFLATE stream, decoded everywhere by miniz_oxide).
@@ -31,7 +36,7 @@ palette = { version = "0.7.6", optional = true }
 # Default is no_std + alloc: store / deflate / lz4, the pure-Rust portable core.
 default = []
 # `std` unlocks the Brotli codec (id 2). Enable it for the full pure-Rust set.
-std = ["dep:brotli"]
+std = ["dep:brotli", "dep:rustc-hash"]
 # Shared C codec set (zstd id 4 + lzav id 6). Linked natively on the host and
 # cross-compiled to wasm via zig for the browser decoder (see `wasm-native`).
 c-codecs = ["std", "dep:zstd-safe", "dep:lzav-shim"]
