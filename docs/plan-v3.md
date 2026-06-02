@@ -17,6 +17,7 @@ After the varint elimiated, it is not reasonable to have multiple palettes to mi
 ## Goal
 - better decoding/encoding performance
 - well-defined palette matching
+- less memory usage on large frames
 
 ## Design Change
 
@@ -43,32 +44,72 @@ There are still 5 bits in reservation for capability. And then we have to define
 The scheme picker should pick the most suitable (least non-capable) color scheme mapping based on the tag in the browser/system themes. 
 When there are more than one scheme that are equally capable for the system theme, pick the nearest base color.
 
-### Body Layout change
+### Containers change
+- magic: "DIF3...."/"DIFR3...", 8 bits with version
+- codec: u8, 4 bits for codec and 4 bits for level mapping
+- codec_palette: u8, the codec-level pair for palette
+- codec_frame: u8, the codec-level pair for frame
+- frame_count: u16
+- replay_count: u16 (how many times to replay; 0 = infinite, 1 = static)
+- width: u32
+- height: u32
+- compressed_body[]
+
+### Intermediate Body
+- flags: u8
+- theme_count: u8 (offset = 1)
+- palette_offset: u16 (the offset of the first palette, from the file start in byte step)
+- reserved: u32
+- color_count: u64 (see indexing, constant u64 for alignment)
+- frame_long_offset: u32 (the offset of the first frame, from the file start in 16 EB step)
+- frame_compressed_long_offset: u32 (the offset of the first frame under compression, from the file start in 16 EB step)
+- frame_offset: u64 (the offset of the first frame, from the file start in byte step)
+- frame_compressed_offset: u64 (the offset of the first frame under compression, from the file start in byte step)
+- frame_compressed_alignment: u64 (the size of each frame after compressed, every frame will have same size with a multiple of 16B)
+- themes[theme_count]:
+  - abilities: u8
+  - base_color:
+    - red: u8
+    - green: u8
+    - blue: u8
+- post_theme_padding: {0, 4, 8, 12} Bytes to have alignment with 16 Bytes.
+- compressed_palette[]
+- post_palette_padding: align to the multiple of 16 Bytes.
+- frames[frame_count]:
+  - length: u64
+  - delay: u32 (in us; 0 = static)
+  - compressed_content[]
+  - padding: align to frame_compressed_alignment
+
+#### The motivation of intermediate body
+- The Body Layout will mainly explode on two parts: palette and the frames.
+- Each theme will only use 1 palette, while it can store up to 256.
+- It will only render one frame at the same time, 
+
+### Fully decompressed body layout
 
 - flags: u8
 - theme_count: u8 (offset = 1)
-- frame_count: u16
-- width: u32
-- height: u32
-- replay_count: u16 (how many times to replay; 0 = infinite, 1 = static)
 - palette_offset: u16 (the offset of the first palette, from the file start in byte step)
+- reserved: u32
 - color_count: u64 (see indexing, constant u64 for alignment)
-- frame_long_offset: u64 (the offset of the first frame, from the file start in 16 EB step)
+- reserved: u32 (for future use)
+- frame_long_offset: u32 (the offset of the first frame, from the file start in 16 EB step)
 - frame_offset: u64 (the offset of the first frame, from the file start in byte step)
 - reserved: u64 (for future use)
 - themes[theme_count]:
-    - abilities: u8
-    - base_color:
-        - red: u8
-        - green: u8
-        - blue: u8
+  - abilities: u8
+  - base_color:
+    - red: u8
+    - green: u8
+    - blue: u8
 - post_theme_padding: {0, 4, 8, 12} Bytes to have alignment with 16 Bytes.
 - palette[theme_count][color_count]: RGBA8/RGBA16/... (see mapped color)
 - post_palette_padding: align to the multiple of 16 Bytes.
 - frames[frame_count]:
-    - delay: u32 (in us; 0 = static)
-    - indexed_bitmap[width][height]: u8/u16/u32/u64
-    - padding: align to the multiple of 16 Bytes.
+  - delay: u32 (in us; 0 = static)
+  - indexed_bitmap[width][height]: u8/u16/u32/u64
+  - padding: align to the multiple of 16 Bytes.
 
 #### Palette offsets
 
