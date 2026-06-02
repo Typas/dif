@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 # `native` adds zstd + the libdeflate encoder + the lzav C shim (Python is a
 # native build, not wasm), so all 8 study variants are encodable from Python.
 dif-core = { path = "../dif-core", features = ["native"] }
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.28", features = ["extension-module"] }
 
 # Optimized build that keeps debug info. `just py` uses this so benchmark
 # numbers reflect real codec speed (plain `dev` is unoptimized and ~10-50x

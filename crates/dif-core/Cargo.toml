@@ -11,7 +11,7 @@ description = "Core codec for the DIF (Diagram Image Format): theme-aware, lossl
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 # LZ4 (lz4_flex) is pure-Rust no_std+alloc, so it stays in the portable set and
 # decodes in the wasm build. `frame` feature off → raw block API with known raw_len.
-lz4_flex = { version = "0.11", default-features = false }
+lz4_flex = { version = "0.13", default-features = false }
 
 # Brotli needs std (its streaming Reader/Writer API); gated behind the `std` feature.
 brotli = { version = "8", optional = true }
