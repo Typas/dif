@@ -1,0 +1,7 @@
+# The bindings/shim crates (dif-py, dif-wasm, kanzi-shim, lzav-shim) are
+# excluded from the workspace so their features don't unify into dif-core's
+# no_std default build. Without this they'd each get their own target/ (dif-py
+# alone ~1.3G) that the root `cargo clean` can't reach. Point every build at the
+# repo-root target/ so one `cargo clean` sweeps all of them.
+[build]
+target-dir = "target"

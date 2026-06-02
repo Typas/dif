@@ -67,7 +67,7 @@ setup-wasm:
 wasm:
     uv run cargo-zigbuild build --release --target wasm32-wasip1 \
         --manifest-path crates/dif-wasm/Cargo.toml
-    wasm-bindgen crates/dif-wasm/target/wasm32-wasip1/release/dif_wasm.wasm \
+    wasm-bindgen target/wasm32-wasip1/release/dif_wasm.wasm \
         --target web --out-dir "$PWD/web/pkg"
 
 # Re-emit the committed demo asset for the current .dif format (run `just py`
