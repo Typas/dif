@@ -9,7 +9,6 @@ Date: 2026-06-01
 - [x] `std` `HashMap` / default-build `alloc::BTreeMap` fallback (drops std-only gate)
 - [x] Tests: frequency order, tie-break, pixel reconstruction
 - [x] Verified: `just test` (16), `just test-native` (23), no_std `just build`, `just pytest` (34)
-- [ ] V3: per-frame subpalette (GIF local color table)
 
 ## Problem
 
@@ -94,13 +93,6 @@ encode. Today the only raw-pixel builder is single-frame, so n = 1 and the
 principle collapses to "count this one frame." When a raw multi-frame builder is
 added later, pass 1 counts across every frame and pass 2 encodes every frame
 against the single shared palette — same two-pass shape.
-
-## Future work (V3)
-
-- **Per-frame subpalette** (GIF-style local color table): each frame carries its
-  own smaller palette with indices scoped to that frame. This is a format change
-  (encode, decode, `validate`, spec, wasm/js viewer) and is deferred to V3.
-  Frequency ordering would then apply within each frame's local table.
 
 ## Tests
 
