@@ -20,7 +20,6 @@ extension/out/
 *.vsix
 
 # Generated artifacts
-spec/*.pdf
 *.dif
 *.difr
 !testdata/**/*.dif
