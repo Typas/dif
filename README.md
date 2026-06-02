@@ -61,6 +61,17 @@ just wasm         # build the decoder into web/pkg
 
 A bare `just` (or `just --list`) prints every recipe.
 
+> [!NOTE]
+> `just setup-wasm` prints deprecation warnings for `multipart` and
+> `buf_redux` while building `wasm-bindgen-cli` from source. These are upstream
+> transitive dependencies (`buf_redux` <- `multipart` <- `rouille` <-
+> `wasm-bindgen-cli`); `rouille` only backs the `wasm-bindgen-test-runner`
+> binary, which this project never runs. The warnings are harmless and not
+> fixable from this repo: `0.2.122` is already the latest `wasm-bindgen-cli`,
+> and the version is pinned to match the `wasm-bindgen` crate. To silence them,
+> install a prebuilt binary instead of compiling (e.g. `cargo binstall
+> wasm-bindgen-cli --version 0.2.122`).
+
 ## justfile recipes
 
 ### Rust core (`dif-core`)
@@ -169,7 +180,8 @@ comparison; **>1** scales jxl/avif/brotli encode and adds `dif-{codec}-mt` rows)
 · `--dif-codecs VARIANT…` (which DIF codec variants to include) · `--out`
 (`bench-formats.tsv`) · `--report` (`bench-formats.md`).
 
-> Note: `bench-formats` does **not** roundtrip-check its `dif-*` rows (it reports
+> [!NOTE]
+> `bench-formats` does **not** roundtrip-check its `dif-*` rows (it reports
 > them lossless by construction); use `bench-codecs --numthreads N` to actually
 > verify the mt encode path. See [`docs/bench-formats-mt.md`](docs/bench-formats-mt.md)
 > for a committed sample report.
