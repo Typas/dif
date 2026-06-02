@@ -49,21 +49,22 @@ clippy:
 py:
     uv run maturin develop --profile dev-release -m crates/dif-py/Cargo.toml
 
-# One-time wasm toolchain. Target is wasm32-wasip1 so wasi-libc provides malloc +
-# the C headers the codec deps need (zstd/lzav). `cargo-zigbuild` + `ziglang`
-# (the zig binary wheel) come from the uv dev env; `wasm-bindgen-cli` is
-# version-pinned to the wasm-bindgen crate so the JS glue matches the .wasm.
-setup-wasm:
+# Target is wasm32-wasip1 so wasi-libc provides malloc + the C headers the codec
+# deps need (zstd/lzav). `cargo-zigbuild` + `ziglang` (the zig binary wheel) come
+# from the uv dev env; `wasm-bindgen-cli` is version-pinned to the wasm-bindgen
+# crate so the JS glue matches the .wasm.
+# One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned wasm-bindgen-cli).
+wasm-setup:
     rustup target add wasm32-wasip1
     uv sync
     cargo install wasm-bindgen-cli --version 0.2.122 --locked
 
-# Build the wasm decoder into web/pkg. The C codecs (zstd id 4, lzav id 6)
-# cross-compile through `zig cc` (cargo-zigbuild) against wasi-libc, so the
-# browser decodes all 8 variants — including the default zstd-3 — not just the
-# pure-Rust store/deflate/brotli/lz4 set. wasm-bindgen then emits the JS glue.
-# The wasip1 module needs a small wasi shim in the loader (see web/main.js).
-# Run `just setup-wasm` once first.
+# The C codecs (zstd id 4, lzav id 6) cross-compile through `zig cc`
+# (cargo-zigbuild) against wasi-libc, so the browser decodes all 8 variants —
+# including the default zstd-3 — not just the pure-Rust store/deflate/brotli/lz4
+# set. wasm-bindgen then emits the JS glue. The wasip1 module needs a small wasi
+# shim in the loader (see web/main.js). Run `just wasm-setup` once first.
+# Build the wasm decoder into web/pkg (all 8 codecs, cross-compiled via zig cc).
 wasm:
     uv run cargo-zigbuild build --release --target wasm32-wasip1 \
         --manifest-path crates/dif-wasm/Cargo.toml
@@ -107,10 +108,9 @@ ext-install variant="code": ext-package
 
 drawio_image := "docker.io/rlespinasse/drawio-export:v4.52.0"
 
-# Pull the render image (and install the extension deps via pnpm).
+# Pull the render image. Podman + Python only; extension/pnpm deps live in `just ext-build`.
 drawio-setup:
     podman pull {{drawio_image}}
-    pnpm --dir extension install
 
 # Render a .drawio to PNG via the local container.
 drawio-png IN OUT:

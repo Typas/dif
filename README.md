@@ -54,7 +54,7 @@ uv run python -m dif_tools convert testdata/usc-sipi-misc/4.1.01.tiff out.dif
 just pytest
 
 # 5. (Optional) View in the browser, theme-aware.
-just setup-wasm   # one-time toolchain
+just wasm-setup   # one-time toolchain
 just wasm         # build the decoder into web/pkg
 #   then serve web/ and open it; the page picks light/dark from the browser.
 ```
@@ -62,7 +62,7 @@ just wasm         # build the decoder into web/pkg
 A bare `just` (or `just --list`) prints every recipe.
 
 > [!NOTE]
-> `just setup-wasm` prints deprecation warnings for `multipart` and
+> `just wasm-setup` prints deprecation warnings for `multipart` and
 > `buf_redux` while building `wasm-bindgen-cli` from source. These are upstream
 > transitive dependencies (`buf_redux` <- `multipart` <- `rouille` <-
 > `wasm-bindgen-cli`); `rouille` only backs the `wasm-bindgen-test-runner`
@@ -91,7 +91,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | Recipe       | Does                                                                                                               |
 |--------------|--------------------------------------------------------------------------------------------------------------------|
 | `py`         | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
-| `setup-wasm` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
+| `wasm-setup` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
 | `wasm`       | Build the browser decoder into `web/pkg` (all 8 codecs cross-compiled via `zig cc`).                               |
 | `regen-demo` | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
 
