@@ -154,9 +154,11 @@ drawio_image := "docker.io/rlespinasse/drawio-export:v4.52.0"
 drawio-setup:
     podman pull {{drawio_image}}
 
-# Render a .drawio to PNG via the local container.
-drawio-png IN OUT:
-    uv run python -c "from dif_tools.drawio import render_drawio_to_png as r; print(r('{{IN}}', '{{OUT}}'))"
+# Render a .drawio to PNG via the local container. SCALE defaults to 2; lower it
+# (e.g. `just drawio-png in.drawio out.png 1`) for wide diagrams on low-RAM hosts
+# -- render memory grows with scale squared.
+drawio-png IN OUT SCALE='2':
+    uv run python -c "from dif_tools.drawio import render_drawio_to_png as r; print(r('{{IN}}', '{{OUT}}', {{SCALE}}))"
 
 # --- Python tools / tests -------------------------------------------------
 
