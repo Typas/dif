@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 use palette::{IntoColor, IsWithinBounds, Oklab, Oklch, Srgb};
 
-use crate::{DifError, Result, Rgba, SampleDepth};
+use crate::{ColorDepth, DifError, Result, Rgba};
 
 /// OKLab chroma below this counts as achromatic (gray): flip lightness instead
 /// of tone-compressing. Mirrors `_ACHROMATIC_C` in the Python reference.
@@ -117,7 +117,7 @@ fn dark_color(c: Rgba, strategy: Strategy, maxv: u16, max: f64) -> Rgba {
 
 /// Derive the dark-theme palette from a light (source) palette. The source theme
 /// stays the lossless identity; this only builds the appended dark theme.
-pub fn derive_dark_palette(palette: &[Rgba], strategy: Strategy, depth: SampleDepth) -> Vec<Rgba> {
+pub fn derive_dark_palette(palette: &[Rgba], strategy: Strategy, depth: ColorDepth) -> Vec<Rgba> {
     let maxv = depth.max_value();
     let max = maxv as f64;
     palette
@@ -126,22 +126,12 @@ pub fn derive_dark_palette(palette: &[Rgba], strategy: Strategy, depth: SampleDe
         .collect()
 }
 
-/// Build the dark-theme grayscale LUT over `0..=max` (length `depth.levels()`).
-/// Gray is achromatic, so `Arithmetic` flips lightness (`L' = 1 - L`).
-pub fn derive_dark_lut(strategy: Strategy, depth: SampleDepth) -> Vec<u16> {
-    let levels = depth.levels();
-    let maxv = depth.max_value();
-    let max = maxv as f64;
-    (0..levels)
-        .map(|v| {
-            let v = v as u16;
-            match strategy {
-                Strategy::Keep => v,
-                Strategy::Invert => maxv - v,
-                Strategy::Arithmetic => arithmetic_rgb(v, v, v, max).0,
-            }
-        })
-        .collect()
+/// Derive the dark theme's `base_color` (RGB8) from the source base color under
+/// `strategy`, so the picker tie-breaks against a representative background.
+pub fn derive_dark_base_color(base: [u8; 3], strategy: Strategy) -> [u8; 3] {
+    let c = Rgba::new(base[0] as u16, base[1] as u16, base[2] as u16, 255);
+    let d = dark_color(c, strategy, 255, 255.0);
+    [d.r as u8, d.g as u8, d.b as u8]
 }
 
 #[cfg(test)]
@@ -155,7 +145,7 @@ mod tests {
             Rgba::new(255, 255, 255, 255),
             Rgba::new(200, 30, 40, 128),
         ];
-        let out = derive_dark_palette(&pal, Strategy::Invert, SampleDepth::Eight);
+        let out = derive_dark_palette(&pal, Strategy::Invert, ColorDepth::Rgba8);
         assert_eq!(out[0], Rgba::new(255, 255, 255, 255)); // black -> white
         assert_eq!(out[1], Rgba::new(0, 0, 0, 255)); // white -> black
         assert_eq!(out[2], Rgba::new(55, 225, 215, 128)); // alpha preserved
@@ -164,7 +154,7 @@ mod tests {
     #[test]
     fn arithmetic_lightness_inverts_extremes() {
         let pal = [Rgba::new(0, 0, 0, 255), Rgba::new(255, 255, 255, 255)];
-        let out = derive_dark_palette(&pal, Strategy::Arithmetic, SampleDepth::Eight);
+        let out = derive_dark_palette(&pal, Strategy::Arithmetic, ColorDepth::Rgba8);
         let mean = |c: Rgba| (c.r as u32 + c.g as u32 + c.b as u32) as f64 / 3.0;
         assert!(mean(out[0]) > 200.0); // black -> light
         assert!(mean(out[1]) < 55.0); // white -> dark
@@ -176,7 +166,7 @@ mod tests {
         let out = derive_dark_palette(
             &[Rgba::new(253, 216, 53, 200)],
             Strategy::Arithmetic,
-            SampleDepth::Eight,
+            ColorDepth::Rgba8,
         )[0];
         assert!(out.r.max(out.g).max(out.b) > 120); // visible
         assert!(out.r > out.b && out.g > out.b); // still warm: R,G > B
@@ -184,18 +174,14 @@ mod tests {
     }
 
     #[test]
-    fn invert_lut() {
-        let lut = derive_dark_lut(Strategy::Invert, SampleDepth::Eight);
-        assert_eq!(lut.len(), 256);
-        assert_eq!(lut[0], 255);
-        assert_eq!(lut[255], 0);
-    }
-
-    #[test]
-    fn arithmetic_lut_flips_lightness() {
-        let lut = derive_dark_lut(Strategy::Arithmetic, SampleDepth::Eight);
-        assert_eq!(lut.len(), 256);
-        assert!(lut[0] > 200); // black sample -> light
-        assert!(lut[255] < 55); // white sample -> dark
+    fn invert_base_color() {
+        assert_eq!(
+            derive_dark_base_color([255, 255, 255], Strategy::Invert),
+            [0, 0, 0]
+        );
+        assert_eq!(
+            derive_dark_base_color([0, 0, 0], Strategy::Invert),
+            [255, 255, 255]
+        );
     }
 }

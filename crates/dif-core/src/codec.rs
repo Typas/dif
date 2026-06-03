@@ -1,95 +1,187 @@
-//! Compressed `.dif` container: a small header naming the codec and the level
-//! that produced it, then the losslessly compressed `.difr` body.
+//! DIF v3 container: the fixed 64-byte header (see [`crate::format`]) plus a
+//! two-stage codec body.
 //!
-//! ```text
-//! magic:"DIF1"  version:u8  codec:u8  level:u8  raw_len:u64   compressed_body:[u8]
-//! ```
+//! A codec byte packs a 4-bit **family** and a 4-bit **level index** into a
+//! per-family level table (so e.g. `zstd-22`, which overflows 4 raw bits, is
+//! reachable as a table index). Family 0 is `common-pick` — a benchmark-derived
+//! table of recommended presets; `0/0` is `Store`.
 //!
-//! The `level` byte records *which level* of the codec family produced the body
-//! (e.g. `zstd-3` vs `zstd-10`). It is informational/forward-compatible: every
-//! supported codec's compressed stream is self-describing, so `decompress`
-//! reads the level from the header but does **not** pass it to the decoder.
+//! Encoding builds the *fully-decompressed* sections (themes, palettes, index
+//! planes), compresses each palette/frame section independently (`codec_palette`
+//! / `codec_frame`) into the **intermediate body**, then wraps the whole
+//! intermediate body in the outer `codec`. With the outer codec set to `Store`
+//! the header offsets index frames directly for random-access / low-memory decode.
 //!
-//! Codecs should prefer a pure-Rust implementation so the decoder compiles to
-//! wasm; native-only codecs (e.g. `Zstd`, `Lzav`) are allowed but unavailable in
-//! the portable wasm decoder. The benchmark studies many more codecs over the
-//! `.difr` body.
+//! Decode is level-agnostic: every supported codec's stream is self-describing,
+//! so only the family (→ method) and the known raw length are needed.
 
 use alloc::vec::Vec;
 
 use crate::error::{DifError, Result};
-use crate::format::{self, VERSION};
-use crate::DifImage;
+use crate::format::{self, align16, Header, HEADER_LEN};
+use crate::{DifImage, Frame};
 
-const MAGIC_DIF: [u8; 4] = *b"DIF1";
-
-/// Compression algorithm used for a `.dif` body.
-///
-/// `Store`/`Deflate`/`Lz4` are pure-Rust and decode in the default no_std build.
-/// `Brotli` requires the `std` feature; `Zstd` and `Lzav` require a C-codec
-/// feature (`native` on the host, or `wasm-native` for the zig-cross wasm
-/// decoder) and are unavailable in a plain no_std build. Byte 3 is reserved
-/// (formerly `Xz`, removed) and rejected.
+/// On-disk codec **family** (the high nibble of a codec byte).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CodecId {
-    /// No compression — body stored verbatim.
-    Store = 0,
-    /// DEFLATE via `miniz_oxide` (decode); `libdeflater` encoder under `native`.
+    /// Benchmark-derived preset table; `level 0` = Store (no compression).
+    Common = 0,
+    /// DEFLATE (`miniz_oxide` decode; `libdeflater` encode under `native`).
     Deflate = 1,
     /// Brotli (`brotli` crate). Requires the `std` feature.
     Brotli = 2,
-    // 3 = reserved (was Xz, removed).
-    /// Zstandard via `zstd-safe`. Requires the `native` feature.
+    /// Bzip3. Not yet wired in this build (needs a C shim); reserved at id 3.
+    Bzip3 = 3,
+    /// Zstandard via `zstd-safe`. Requires a C-codec feature.
     Zstd = 4,
     /// LZ4 block via `lz4_flex` (pure-Rust, portable + wasm-decodable).
     Lz4 = 5,
-    /// LZAV via the vendored `lzav-shim` C shim. Requires the `native` feature.
+    /// LZAV via the vendored `lzav-shim` C shim. Requires a C-codec feature.
     Lzav = 6,
 }
 
-impl CodecId {
-    pub fn from_u8(v: u8) -> Result<Self> {
-        match v {
-            0 => Ok(CodecId::Store),
-            1 => Ok(CodecId::Deflate),
-            2 => Ok(CodecId::Brotli),
-            4 => Ok(CodecId::Zstd),
-            5 => Ok(CodecId::Lz4),
-            6 => Ok(CodecId::Lzav),
-            _ => Err(DifError::BadCodec(v)),
+/// Internal decode/encode method a codec byte resolves to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Method {
+    Store,
+    Deflate,
+    Brotli,
+    Bzip3,
+    Zstd,
+    Lz4,
+    Lzav,
+}
+
+// Per-family level tables. The level nibble indexes these; the value is the real
+// (nominal) level recorded for provenance and used by encoders that honor it.
+const DEFLATE_LEVELS: [i32; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const BROTLI_LEVELS: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+// Bzip3 block-size presets in KiB (unused until the codec is wired).
+const BZIP3_LEVELS_KIB: [i32; 14] = [
+    65, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 523264,
+];
+const ZSTD_LEVELS: [i32; 16] = [-7, -5, -3, -1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22];
+// LZ4: positive = `lz4_flex` fast acceleration, negative = HC level (provenance
+// only; `lz4_flex` exposes the fast block path, so the encoder ignores the value).
+const LZ4_LEVELS: [i32; 13] = [99, 64, 32, 16, 8, 4, 2, 1, -1, -3, -6, -9, -12];
+const LZAV_LEVELS: [i32; 2] = [1, 2];
+
+/// A packed codec byte: `(family << 4) | level_index`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Codec(pub u8);
+
+impl Codec {
+    pub fn new(family: CodecId, level_index: u8) -> Self {
+        Codec(((family as u8) << 4) | (level_index & 0xF))
+    }
+
+    /// `Store` — common-pick family, level 0.
+    pub fn store() -> Self {
+        Codec(0x00)
+    }
+
+    pub fn family(self) -> u8 {
+        self.0 >> 4
+    }
+    pub fn level_index(self) -> usize {
+        (self.0 & 0xF) as usize
+    }
+
+    fn resolve(self) -> Result<(Method, i32)> {
+        let lvl = self.level_index();
+        let pick = |t: &[i32]| t.get(lvl).copied().ok_or(DifError::BadCodec(self.0));
+        match self.family() {
+            0 => match lvl {
+                0 => Ok((Method::Store, 0)),
+                _ => Err(DifError::BadCodec(self.0)), // common-pick presets TBD
+            },
+            1 => Ok((Method::Deflate, pick(&DEFLATE_LEVELS)?)),
+            2 => Ok((Method::Brotli, pick(&BROTLI_LEVELS)?)),
+            3 => Ok((Method::Bzip3, pick(&BZIP3_LEVELS_KIB)?)),
+            4 => Ok((Method::Zstd, pick(&ZSTD_LEVELS)?)),
+            5 => Ok((Method::Lz4, pick(&LZ4_LEVELS)?)),
+            6 => Ok((Method::Lzav, pick(&LZAV_LEVELS)?)),
+            _ => Err(DifError::BadCodec(self.0)),
         }
     }
-}
 
-/// Compress `data` with `codec` at `level`. The per-family meaning of `level`:
-/// Deflate 0–9 (libdeflate 1–12), Brotli quality 0–11, Zstd 1–22, Lz4/Lzav
-/// ignore it (only their fast level is wired). `Store` ignores it too.
-fn compress(data: &[u8], codec: CodecId, level: u8, workers: u32) -> Result<Vec<u8>> {
-    match codec {
-        CodecId::Store => Ok(data.to_vec()),
-        CodecId::Deflate => deflate_compress(data, level),
-        CodecId::Brotli => brotli_compress(data, level, workers),
-        CodecId::Zstd => zstd_compress(data, level, workers),
-        CodecId::Lz4 => Ok(lz4_flex::block::compress(data)),
-        CodecId::Lzav => lzav_compress(data),
+    /// Parse a study variant string (`"store"`, `"zstd-3"`, `"brotli-11"`,
+    /// `"lz4-fast1"`, `"lzav-1"`, `"libdeflate-6"`, …) into a codec byte. Bare
+    /// family names alias their study-chosen default level. Single source of truth
+    /// for the per-family level semantics shared with the Python binding.
+    pub fn parse(name: &str) -> Result<Codec> {
+        fn idx(table: &[i32], v: i32) -> Option<u8> {
+            table.iter().position(|&x| x == v).map(|p| p as u8)
+        }
+        let bad = || DifError::Invalid("unknown codec variant string");
+        let (fam, real): (CodecId, i32) = match name {
+            "store" => return Ok(Codec::store()),
+            "deflate" | "libdeflate" | "deflate-6" | "libdeflate-6" => (CodecId::Deflate, 6),
+            "brotli" | "brotli-5" => (CodecId::Brotli, 5),
+            "brotli-11" => (CodecId::Brotli, 11),
+            "zstd" | "zstd-3" => (CodecId::Zstd, 3),
+            "zstd-10" => (CodecId::Zstd, 10),
+            "zstd-22" => (CodecId::Zstd, 22),
+            "lz4" | "lz4-fast1" => (CodecId::Lz4, 1),
+            "lzav" | "lzav-1" => (CodecId::Lzav, 1),
+            _ => return Err(bad()),
+        };
+        let table: &[i32] = match fam {
+            CodecId::Deflate => &DEFLATE_LEVELS,
+            CodecId::Brotli => &BROTLI_LEVELS,
+            CodecId::Zstd => &ZSTD_LEVELS,
+            CodecId::Lz4 => &LZ4_LEVELS,
+            CodecId::Lzav => &LZAV_LEVELS,
+            _ => return Err(bad()),
+        };
+        let li = idx(table, real).ok_or_else(bad)?;
+        Ok(Codec::new(fam, li))
     }
 }
 
-/// Decompress `data` (known uncompressed size `raw_len`). The header's level
-/// byte is not needed — every codec's stream is self-describing.
-fn decompress(codec: CodecId, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
-    match codec {
-        CodecId::Store => Ok(data.to_vec()),
-        CodecId::Deflate => {
+// --- section (de)compression ---------------------------------------------
+
+fn compress_section(codec: Codec, raw: &[u8], workers: u32) -> Result<Vec<u8>> {
+    let (method, level) = codec.resolve()?;
+    compress(method, level, raw, workers)
+}
+
+fn decompress_section(codec: Codec, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
+    let (method, _) = codec.resolve()?;
+    decompress(method, data, raw_len)
+}
+
+fn compress(method: Method, level: i32, data: &[u8], workers: u32) -> Result<Vec<u8>> {
+    match method {
+        Method::Store => Ok(data.to_vec()),
+        Method::Deflate => deflate_compress(data, level),
+        Method::Brotli => brotli_compress(data, level.clamp(0, 11) as u8, workers),
+        Method::Zstd => zstd_compress(data, level, workers),
+        Method::Lz4 => Ok(lz4_flex::block::compress(data)),
+        Method::Lzav => lzav_compress(data),
+        Method::Bzip3 => Err(DifError::Invalid("bzip3 codec not yet wired")),
+    }
+}
+
+fn decompress(method: Method, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
+    match method {
+        Method::Store => {
+            if data.len() < raw_len {
+                return Err(DifError::UnexpectedEof);
+            }
+            Ok(data[..raw_len].to_vec())
+        }
+        Method::Deflate => {
             miniz_oxide::inflate::decompress_to_vec(data).map_err(|_| DifError::CompressionFailed)
         }
-        CodecId::Brotli => brotli_decompress(data, raw_len),
-        CodecId::Zstd => zstd_decompress(data, raw_len),
-        CodecId::Lz4 => {
+        Method::Brotli => brotli_decompress(data, raw_len),
+        Method::Zstd => zstd_decompress(data, raw_len),
+        Method::Lz4 => {
             lz4_flex::block::decompress(data, raw_len).map_err(|_| DifError::CompressionFailed)
         }
-        CodecId::Lzav => lzav_decompress(data, raw_len),
+        Method::Lzav => lzav_decompress(data, raw_len),
+        Method::Bzip3 => Err(DifError::Invalid("bzip3 codec not yet wired")),
     }
 }
 
@@ -97,16 +189,19 @@ fn decompress(codec: CodecId, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 //     Both emit a standard raw DEFLATE stream, decoded by miniz_oxide everywhere.
 
 #[cfg(not(feature = "native"))]
-fn deflate_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
-    Ok(miniz_oxide::deflate::compress_to_vec(data, level))
+fn deflate_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    Ok(miniz_oxide::deflate::compress_to_vec(
+        data,
+        level.clamp(0, 10) as u8,
+    ))
 }
 
 #[cfg(feature = "native")]
-fn deflate_compress(data: &[u8], level: u8) -> Result<Vec<u8>> {
+fn deflate_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
     use libdeflater::{CompressionLvl, Compressor};
-    let lvl = CompressionLvl::new(level as i32).map_err(|_| DifError::CompressionFailed)?;
+    let lvl = CompressionLvl::new(level.clamp(1, 12)).map_err(|_| DifError::CompressionFailed)?;
     let mut c = Compressor::new(lvl);
-    let mut out = vec![0u8; c.deflate_compress_bound(data.len())];
+    let mut out = alloc::vec![0u8; c.deflate_compress_bound(data.len())];
     let n = c
         .deflate_compress(data, &mut out)
         .map_err(|_| DifError::CompressionFailed)?;
@@ -138,17 +233,6 @@ fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
 
-// `workers` > 1 (with the `brotli-mt` feature) runs `compress_multi`: the input
-// is split into independent meta-blocks compressed on parallel std threads and
-// written as ONE standard brotli stream, decoded by the normal path — no format
-// change. The cross-chunk window break costs a little ratio. Pays off on the slow
-// high-quality levels (brotli-11) where encode is CPU-bound. `workers` <= 1 (or
-// the feature off) keeps the single-thread `CompressorWriter`, byte-unchanged.
-//
-// Gated to `level >= 10`: brotli ships two encoders — the fast q0–9 path and the
-// full q10–11 path — and `compress_multi` only drives the full one, so feeding it
-// a low quality OOB-panics (brotli_bit_stream.rs). q0–9 is cheap anyway, so MT
-// buys nothing there; fall through to the single-thread writer.
 #[cfg(feature = "std")]
 #[cfg_attr(not(feature = "brotli-mt"), allow(unused_variables))]
 fn brotli_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
@@ -173,19 +257,17 @@ fn brotli_compress_mt(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
         SliceWrapperMut, StandardAlloc, UnionHasher,
     };
 
-    let mut params = BrotliEncoderParams::default();
-    params.quality = level as i32;
-    params.lgwin = 22;
+    let params = BrotliEncoderParams {
+        quality: level as i32,
+        lgwin: 22,
+        ..Default::default()
+    };
 
-    // compress_multi needs an owned (`'static + Send`) input, so copy the body
-    // into an allocator-owned cell rather than borrowing it.
     let mut ialloc = StandardAlloc::default();
     let mut input = <StandardAlloc as Allocator<u8>>::alloc_cell(&mut ialloc, data.len());
     input.slice_mut().copy_from_slice(data);
     let mut owned = Owned::new(input);
 
-    // One allocator slot per thread; the spawner is brotli's internal std-thread
-    // pool. Cap at the fixed 16-slot array (matches brotli's own CLI driver).
     let nthreads = (workers as usize).clamp(1, 16);
     let mut allocs = [
         SendAlloc::new(StandardAlloc::default(), UnionHasher::Uninit),
@@ -234,31 +316,26 @@ fn brotli_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 
 // --- Zstd: with the C-codec feature set (zstd-safe links C zstd) ---
 
-// `workers` > 0 runs zstd's multithreaded encoder (needs the `zstd-mt` feature,
-// host-only). The output is a standard zstd frame — internally more blocks, but
-// decoded by the same single-thread `zstd_decompress`, so no format change.
-// `workers` == 0 (or `zstd-mt` off) keeps the original one-shot path, byte-for-
-// byte identical to before, so single-thread `zstd-N` sizes are unchanged.
 #[cfg(feature = "c-codecs")]
 #[cfg_attr(not(feature = "zstd-mt"), allow(unused_variables))]
-fn zstd_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
+fn zstd_compress(data: &[u8], level: i32, workers: u32) -> Result<Vec<u8>> {
     #[cfg(feature = "zstd-mt")]
     if workers > 0 {
         use zstd_safe::{CCtx, CParameter};
         let mut cctx = CCtx::create();
-        cctx.set_parameter(CParameter::CompressionLevel(level as i32))
+        cctx.set_parameter(CParameter::CompressionLevel(level))
             .map_err(|_| DifError::CompressionFailed)?;
         cctx.set_parameter(CParameter::NbWorkers(workers))
             .map_err(|_| DifError::CompressionFailed)?;
-        let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
+        let mut out = alloc::vec![0u8; zstd_safe::compress_bound(data.len())];
         let n = cctx
             .compress2(out.as_mut_slice(), data)
             .map_err(|_| DifError::CompressionFailed)?;
         out.truncate(n);
         return Ok(out);
     }
-    let mut out = vec![0u8; zstd_safe::compress_bound(data.len())];
-    let n = zstd_safe::compress(out.as_mut_slice(), data, level as i32)
+    let mut out = alloc::vec![0u8; zstd_safe::compress_bound(data.len())];
+    let n = zstd_safe::compress(out.as_mut_slice(), data, level)
         .map_err(|_| DifError::CompressionFailed)?;
     out.truncate(n);
     Ok(out)
@@ -266,7 +343,7 @@ fn zstd_compress(data: &[u8], level: u8, workers: u32) -> Result<Vec<u8>> {
 
 #[cfg(feature = "c-codecs")]
 fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
-    let mut out = vec![0u8; raw_len];
+    let mut out = alloc::vec![0u8; raw_len];
     let n =
         zstd_safe::decompress(out.as_mut_slice(), data).map_err(|_| DifError::CompressionFailed)?;
     out.truncate(n);
@@ -274,7 +351,7 @@ fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "c-codecs"))]
-fn zstd_compress(_data: &[u8], _level: u8, _workers: u32) -> Result<Vec<u8>> {
+fn zstd_compress(_data: &[u8], _level: i32, _workers: u32) -> Result<Vec<u8>> {
     Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
@@ -283,164 +360,359 @@ fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
-/// Serialize and compress an image into a `.dif` container at codec `level`.
-/// The level is recorded in the header for provenance; decode ignores it.
-pub fn to_dif(img: &DifImage, codec: CodecId, level: u8) -> Result<Vec<u8>> {
-    to_dif_workers(img, codec, level, 0)
+// --- container assembly ---------------------------------------------------
+
+fn encode(
+    img: &DifImage,
+    is_raw: bool,
+    outer: Codec,
+    palette: Codec,
+    frame: Codec,
+    workers: u32,
+) -> Result<Vec<u8>> {
+    img.validate()?;
+    let depth = img.color_depth;
+    let iw = img.index_width;
+    let t = img.themes.len();
+    let cc = img.index_count();
+
+    // Build the intermediate body: themes | pad16 | palette blob | pad16 | frames.
+    let mut mid: Vec<u8> = Vec::new();
+    format::themes_bytes(&img.themes, &mut mid);
+    pad_to_16(&mut mid); // palette begins here, at align16(4 * t)
+
+    let mut raw_pal: Vec<u8> = Vec::new();
+    format::palettes_bytes(&img.palettes, depth, &mut raw_pal);
+    let pal_blob = compress_section(palette, &raw_pal, workers)?;
+    let palette_size = pal_blob.len();
+    mid.extend_from_slice(&pal_blob);
+    pad_to_16(&mut mid);
+    let first_frame_start = mid.len();
+
+    // Compress each frame, then pick a uniform 16-aligned stride.
+    let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(img.frames.len());
+    for f in &img.frames {
+        let mut raw_bm: Vec<u8> = Vec::new();
+        format::frame_bitmap_bytes(&f.indices, iw, &mut raw_bm);
+        blobs.push(compress_section(frame, &raw_bm, workers)?);
+    }
+    let alignment = blobs
+        .iter()
+        .map(|b| align16(12 + b.len()))
+        .max()
+        .unwrap_or(16)
+        .max(16);
+
+    for (f, blob) in img.frames.iter().zip(&blobs) {
+        let record_start = mid.len();
+        let size = (12 + blob.len()) as u64; // size field + delay + content
+        mid.extend_from_slice(&size.to_le_bytes());
+        mid.extend_from_slice(&f.delay_us.to_le_bytes());
+        mid.extend_from_slice(blob);
+        mid.resize(record_start + alignment, 0);
+    }
+
+    let body = compress_section(outer, &mid, workers)?;
+
+    let header = Header {
+        is_raw,
+        codec: outer.0,
+        flags: iw.to_bits() | (depth.to_bits() << 2),
+        codec_palette: palette.0,
+        codec_frame: frame.0,
+        theme_count: t,
+        frame_count: img.frames.len(),
+        replay_count: img.replay_count,
+        width: img.width,
+        height: img.height,
+        first_frame_offset: (HEADER_LEN + first_frame_start) as u128,
+        frame_alignment: alignment as u64,
+        index_count: cc as u64,
+        palette_size: palette_size as u64,
+    };
+    let mut out = Vec::with_capacity(HEADER_LEN + body.len());
+    header.write(&mut out);
+    out.extend_from_slice(&body);
+    Ok(out)
 }
 
-/// Like [`to_dif`], but `workers` > 0 runs the multithreaded zstd encoder
-/// (other codecs ignore it). `workers` is encode-only — not stored — and the
-/// bytes stay a standard container decoded by [`from_dif`], so the file is
-/// indistinguishable from a single-thread `to_dif` at the same codec/level.
-pub fn to_dif_workers(img: &DifImage, codec: CodecId, level: u8, workers: u32) -> Result<Vec<u8>> {
-    img.validate()?;
-    let mut body = Vec::new();
-    format::write_body(img, &mut body);
-    let compressed = compress(&body, codec, level, workers)?;
+fn decode(bytes: &[u8]) -> Result<DifImage> {
+    let h = Header::read(bytes)?;
+    let depth = h.color_depth()?;
+    let iw = h.index_width()?;
+    let t = h.theme_count;
+    if t == 0 || t > 256 {
+        return Err(DifError::BadThemeCount(t));
+    }
+    let cc = h.index_count as usize;
+    let px = h.width as usize * h.height as usize;
+    let body = &bytes[HEADER_LEN..];
 
-    let mut out = Vec::with_capacity(compressed.len() + 15);
-    out.extend_from_slice(&MAGIC_DIF);
-    out.push(VERSION);
-    out.push(codec as u8);
-    out.push(level);
-    out.extend_from_slice(&(body.len() as u64).to_le_bytes());
-    out.extend_from_slice(&compressed);
-    Ok(out)
+    let first_frame_internal = (h.first_frame_offset - HEADER_LEN as u128) as usize;
+    let alignment = h.frame_alignment as usize;
+    if alignment == 0 || !alignment.is_multiple_of(16) {
+        return Err(DifError::Unaligned(alignment as u64));
+    }
+    let mid_len = first_frame_internal
+        .checked_add(
+            h.frame_count
+                .checked_mul(alignment)
+                .ok_or(DifError::UnexpectedEof)?,
+        )
+        .ok_or(DifError::UnexpectedEof)?;
+
+    let mid = decompress_section(Codec(h.codec), body, mid_len)?;
+    if mid.len() < mid_len {
+        return Err(DifError::UnexpectedEof);
+    }
+
+    let themes = format::read_themes(&mid, t)?;
+
+    let palette_start = align16(t * 4);
+    let palette_size = h.palette_size as usize;
+    let pal_end = palette_start
+        .checked_add(palette_size)
+        .ok_or(DifError::UnexpectedEof)?;
+    if pal_end > mid.len() || first_frame_internal < palette_start {
+        return Err(DifError::Invalid("palette section out of bounds"));
+    }
+    let pal_blob = &mid[palette_start..pal_end];
+    let raw_pal_len = t * cc * depth.color_bytes();
+    let raw_pal = decompress_section(Codec(h.codec_palette), pal_blob, raw_pal_len)?;
+    let palettes = format::read_palettes(&raw_pal, t, cc, depth)?;
+
+    let mut frames = Vec::with_capacity(h.frame_count);
+    let bm_len = px * iw.bytes();
+    for j in 0..h.frame_count {
+        let fstart = first_frame_internal + j * alignment;
+        if fstart + 12 > mid.len() {
+            return Err(DifError::UnexpectedEof);
+        }
+        let size = u64::from_le_bytes(mid[fstart..fstart + 8].try_into().unwrap()) as usize;
+        let delay = u32::from_le_bytes(mid[fstart + 8..fstart + 12].try_into().unwrap());
+        if size < 12 || fstart + size > mid.len() {
+            return Err(DifError::Invalid("bad frame record size"));
+        }
+        let blob = &mid[fstart + 12..fstart + size];
+        let raw_bm = decompress_section(Codec(h.codec_frame), blob, bm_len)?;
+        let indices = format::read_frame_bitmap(&raw_bm, px, iw)?;
+        frames.push(Frame {
+            delay_us: delay,
+            indices,
+        });
+    }
+
+    let img = DifImage {
+        width: h.width,
+        height: h.height,
+        color_depth: depth,
+        index_width: iw,
+        themes,
+        palettes,
+        frames,
+        replay_count: h.replay_count,
+    };
+    img.validate()?;
+    Ok(img)
+}
+
+fn pad_to_16(buf: &mut Vec<u8>) {
+    let n = align16(buf.len());
+    buf.resize(n, 0);
+}
+
+/// Serialize and compress an image into a `.dif` container (single-thread).
+pub fn to_dif(img: &DifImage, outer: Codec, palette: Codec, frame: Codec) -> Result<Vec<u8>> {
+    to_dif_workers(img, outer, palette, frame, 0)
+}
+
+/// Like [`to_dif`], but `workers` > 0 runs the multithreaded zstd/brotli encoders
+/// (other codecs ignore it). `workers` is encode-only — not stored — and the bytes
+/// stay a standard container decoded by [`from_dif`].
+pub fn to_dif_workers(
+    img: &DifImage,
+    outer: Codec,
+    palette: Codec,
+    frame: Codec,
+    workers: u32,
+) -> Result<Vec<u8>> {
+    encode(img, false, outer, palette, frame, workers)
+}
+
+/// Serialize to a raw, uncompressed `.difr` container (all sections `Store`).
+pub fn to_difr(img: &DifImage) -> Result<Vec<u8>> {
+    encode(img, true, Codec::store(), Codec::store(), Codec::store(), 0)
 }
 
 /// Parse and decompress a `.dif` container.
 pub fn from_dif(bytes: &[u8]) -> Result<DifImage> {
-    if bytes.len() < 15 {
-        return Err(DifError::UnexpectedEof);
+    let h = Header::read(bytes)?;
+    if h.is_raw {
+        return Err(DifError::BadMagic(format::MAGIC_DIFR));
     }
-    let magic = [bytes[0], bytes[1], bytes[2], bytes[3]];
-    if magic != MAGIC_DIF {
-        return Err(DifError::BadMagic(magic));
+    decode(bytes)
+}
+
+/// Parse a raw `.difr` container.
+pub fn from_difr(bytes: &[u8]) -> Result<DifImage> {
+    let h = Header::read(bytes)?;
+    if !h.is_raw {
+        return Err(DifError::BadMagic(format::MAGIC_DIF));
     }
-    if bytes[4] != VERSION {
-        return Err(DifError::BadVersion(bytes[4]));
-    }
-    let codec = CodecId::from_u8(bytes[5])?;
-    // bytes[6] = level: self-describing streams don't need it on decode.
-    let raw_len = u64::from_le_bytes(bytes[7..15].try_into().unwrap()) as usize;
-    let body = decompress(codec, &bytes[15..], raw_len)?;
-    if body.len() != raw_len {
-        return Err(DifError::Invalid("decompressed length mismatch"));
-    }
-    let mut pos = 0;
-    format::read_body(&body, &mut pos)
+    decode(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Content, ModeTag, Rgba, SampleDepth, Theme};
+    use crate::{abilities, ColorDepth, IndexWidth, Rgba, Theme, ThemeTag};
+    use alloc::vec;
 
-    fn sample() -> DifImage {
-        let light = vec![Rgba::new(255, 255, 255, 255), Rgba::new(0, 0, 0, 255)];
-        let dark = vec![Rgba::new(0, 0, 0, 255), Rgba::new(255, 255, 255, 255)];
+    fn sample(depth: ColorDepth, iw: IndexWidth) -> DifImage {
+        let maxc = if depth == ColorDepth::Rgba8 {
+            255
+        } else {
+            60000
+        };
+        let light = vec![Rgba::new(maxc, maxc, maxc, maxc), Rgba::new(0, 0, 0, maxc)];
+        let dark = vec![Rgba::new(0, 0, 0, maxc), Rgba::new(maxc, maxc, maxc, maxc)];
         DifImage {
             width: 4,
             height: 4,
-            depth: SampleDepth::Eight,
+            color_depth: depth,
+            index_width: iw,
             themes: vec![
                 Theme {
-                    tag: ModeTag::Light,
-                    name: "light".into(),
+                    abilities: abilities::LIGHT,
+                    base_color: [255, 255, 255],
                 },
                 Theme {
-                    tag: ModeTag::Dark,
-                    name: "dark".into(),
+                    abilities: abilities::DARK,
+                    base_color: [0, 0, 0],
                 },
             ],
-            content: Content::Indexed {
-                palettes: vec![light, dark],
-                frames: vec![vec![0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1]],
-            },
-            frame_delays: vec![0],
+            palettes: vec![light, dark],
+            frames: vec![Frame {
+                delay_us: 0,
+                indices: vec![0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1],
+            }],
+            replay_count: 1,
         }
     }
 
     #[test]
-    fn dif_roundtrip_all_codecs() {
-        let img = sample();
-        // (codec, level). `mut`/pushes are feature-gated; with no features only
-        // the portable set (Store/Deflate/Lz4) exists.
+    fn difr_roundtrip_all_combos() {
+        for depth in [ColorDepth::Rgba8, ColorDepth::Rgba16] {
+            for iw in [IndexWidth::Eight, IndexWidth::Sixteen] {
+                let img = sample(depth, iw);
+                let bytes = to_difr(&img).unwrap();
+                assert_eq!(&bytes[..5], b"DIFR3");
+                let back = from_difr(&bytes).unwrap();
+                assert_eq!(img, back, "depth {depth:?} width {iw:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn dif_roundtrip_codec_matrix() {
+        let img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
         #[allow(unused_mut)]
-        let mut codecs = vec![
-            (CodecId::Store, 0u8),
-            (CodecId::Deflate, 6),
-            (CodecId::Lz4, 1),
-        ];
+        let mut codecs = vec!["store", "deflate", "lz4"];
         #[cfg(feature = "std")]
-        codecs.push((CodecId::Brotli, 5));
+        codecs.push("brotli-5");
         #[cfg(feature = "native")]
         {
-            codecs.push((CodecId::Zstd, 3));
-            codecs.push((CodecId::Lzav, 1));
+            codecs.push("zstd-3");
+            codecs.push("lzav-1");
         }
-        for (codec, level) in codecs {
-            let bytes = to_dif(&img, codec, level).unwrap();
-            assert_eq!(&bytes[..4], b"DIF1");
-            assert_eq!(bytes[5], codec as u8);
-            assert_eq!(bytes[6], level, "level byte for {codec:?}");
-            let back = from_dif(&bytes).unwrap();
-            assert_eq!(img, back, "codec {codec:?}");
+        for name in codecs {
+            let c = Codec::parse(name).unwrap();
+            // Try it as outer, as palette section, and as frame section.
+            for (o, p, f) in [(c, Codec::store(), Codec::store()), (Codec::store(), c, c)] {
+                let bytes = to_dif_workers(&img, o, p, f, 0).unwrap();
+                assert_eq!(&bytes[..4], b"DIF3");
+                let back = from_dif(&bytes).unwrap();
+                assert_eq!(img, back, "codec {name} o={o:?} p={p:?} f={f:?}");
+            }
         }
     }
 
     #[test]
-    #[cfg(feature = "native")]
-    fn zstd_level_roundtrip() {
-        // Different levels produce different bodies but both decode equal — the
-        // level byte is recorded yet not consumed by decode.
-        let img = sample();
-        let lo = to_dif(&img, CodecId::Zstd, 3).unwrap();
-        let hi = to_dif(&img, CodecId::Zstd, 10).unwrap();
-        assert_eq!(lo[6], 3);
-        assert_eq!(hi[6], 10);
-        assert_eq!(from_dif(&lo).unwrap(), img);
-        assert_eq!(from_dif(&hi).unwrap(), img);
-    }
-
-    #[test]
-    #[cfg(feature = "std")]
-    fn brotli_smaller_than_store_on_repetitive() {
-        // A large repetitive image should compress well.
-        let frame = vec![0u32; 64 * 64];
-        let pal = vec![Rgba::new(1, 2, 3, 255)];
-        let img = DifImage {
-            width: 64,
-            height: 64,
-            depth: SampleDepth::Eight,
-            themes: vec![Theme {
-                tag: ModeTag::Light,
-                name: "l".into(),
-            }],
-            content: Content::Indexed {
-                palettes: vec![pal],
-                frames: vec![frame],
+    fn multi_frame_random_access_offsets() {
+        let mut img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
+        img.frames = vec![
+            Frame {
+                delay_us: 100,
+                indices: vec![0u64; 16],
             },
-            frame_delays: vec![0],
-        };
-        let store = to_dif(&img, CodecId::Store, 0).unwrap().len();
-        let brotli = to_dif(&img, CodecId::Brotli, 5).unwrap().len();
-        assert!(brotli < store, "brotli {brotli} should beat store {store}");
+            Frame {
+                delay_us: 200,
+                indices: vec![1u64; 16],
+            },
+            Frame {
+                delay_us: 300,
+                indices: vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+            },
+        ];
+        img.replay_count = 0;
+        let bytes = to_difr(&img).unwrap();
+        let back = from_difr(&bytes).unwrap();
+        assert_eq!(img, back);
+        assert_eq!(back.frames[1].delay_us, 200);
+        assert_eq!(back.replay_count, 0);
     }
 
     #[test]
-    fn bad_codec_byte_rejected() {
-        let mut bytes = to_dif(&sample(), CodecId::Store, 0).unwrap();
-        bytes[5] = 99;
-        assert!(matches!(from_dif(&bytes), Err(DifError::BadCodec(99))));
+    fn render_picks_dark_theme() {
+        let img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
+        // dark palette: idx0=black, idx1=white. frame[0..2] = [0,1].
+        let rgba = img.render_rgba8(ThemeTag::Dark, [0, 0, 0], 0).unwrap();
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[255, 255, 255, 255]);
     }
 
     #[test]
-    fn reserved_codec_byte_3_rejected() {
-        // Byte 3 was Xz; it must now be rejected as unknown.
-        let mut bytes = to_dif(&sample(), CodecId::Store, 0).unwrap();
-        bytes[5] = 3;
-        assert!(matches!(from_dif(&bytes), Err(DifError::BadCodec(3))));
+    fn parse_known_variants() {
+        assert_eq!(Codec::parse("store").unwrap(), Codec(0x00));
+        assert_eq!(
+            Codec::parse("zstd-3").unwrap(),
+            Codec::new(CodecId::Zstd, 6)
+        );
+        assert_eq!(
+            Codec::parse("zstd-22").unwrap(),
+            Codec::new(CodecId::Zstd, 15)
+        );
+        assert_eq!(
+            Codec::parse("brotli-11").unwrap(),
+            Codec::new(CodecId::Brotli, 11)
+        );
+        assert_eq!(
+            Codec::parse("lz4-fast1").unwrap(),
+            Codec::new(CodecId::Lz4, 7)
+        );
+        assert!(Codec::parse("nope").is_err());
+    }
+
+    #[test]
+    fn bad_magic_rejected() {
+        let mut bytes = to_dif(
+            &sample(ColorDepth::Rgba8, IndexWidth::Eight),
+            Codec::store(),
+            Codec::store(),
+            Codec::store(),
+        )
+        .unwrap();
+        bytes[0] = b'X';
+        assert!(matches!(from_dif(&bytes), Err(DifError::BadMagic(_))));
+    }
+
+    #[test]
+    fn reject_32bit_index_width() {
+        let mut bytes = to_difr(&sample(ColorDepth::Rgba8, IndexWidth::Eight)).unwrap();
+        bytes[9] = (bytes[9] & !0b11) | 0b10; // index width -> 32-bit
+        assert!(matches!(
+            from_difr(&bytes),
+            Err(DifError::BadIndexWidth(32))
+        ));
     }
 }

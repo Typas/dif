@@ -1,368 +1,258 @@
-//! Raw (uncompressed) serialization of a [`DifImage`] — the `.difr` body.
+//! DIF v3 byte layout: the fixed 64-byte container header and the pure
+//! (de)serialization of the *decompressed* body sections (themes, palettes, and
+//! per-frame index planes). This module is codec-agnostic — [`crate::codec`]
+//! drives the two-stage compression and assembles the intermediate body.
 //!
-//! Layout (little-endian), used both standalone (`.difr`, magic `DIFR`) and as
-//! the payload inside a compressed `.dif` container:
+//! Header (64 bytes, little-endian):
 //!
 //! ```text
-//! flags:u8   bit0 mode(0=indexed,1=grayscale)  bit1 depth(0=8bit,1=16bit)
-//! width:u32  height:u32  frame_count:u32  theme_count:u8
-//! themes[theme_count]:  tag:u8  name_len:u8  name:[u8; name_len]
-//! frame_delays[frame_count]: u16
-//! indexed:   color_count:varint
-//!            palette[theme][color]: RGBA, each channel 1 or 2 bytes
-//!            frames[frame][pixel]: varint index
-//! grayscale: lut[theme][level]: sample (1 or 2 bytes), level in 0..depth.levels()
-//!            frames[frame][pixel]: sample (1 or 2 bytes)
+//! 0  magic[8]   "DIF3\0\0\0\0" | "DIFR3\0\0\0"   (carries version '3')
+//! 8  codec:u8         outer whole-body  (4b family | 4b level index)
+//! 9  flags:u8         bit0-1 index width; bit2-5 color depth
+//! 10 codec_palette:u8 per-palette section codec
+//! 11 codec_frame:u8   per-frame section codec
+//! 12 theme_count:u8   stored = count - 1  (1..=256)
+//! 13 reserved:u8
+//! 14 frame_count:u16
+//! 16 replay_count:u16 0=infinite, 1=static
+//! 18 reserved:u16
+//! 20 width:u32
+//! 24 height:u32
+//! 28 frame_long_offset:u32  upper 32 bits of the first-frame offset
+//! 32 frame_offset:u64       lower 64 bits of the first-frame offset
+//! 40 frame_alignment:u64    per-frame stride (multiple of 16)
+//! 48 index_count:u64        palette length (color count)
+//! 56 palette_size:u64       compressed palette-section length (was reserved)
+//! 64 compressed_body[]
 //! ```
+//!
+//! `palette_size` (offset 56, a v2-reserved slot) records the exact byte length of
+//! the single compressed palette blob so the decoder can bound it without relying
+//! on a self-terminating codec; the palette still begins at the spec offset
+//! `64 + align(4*theme_count, 16)`.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::{DifError, Result};
-use crate::{varint, Content, DifImage, ModeTag, Rgba, SampleDepth, Theme};
+use crate::{ColorDepth, IndexWidth, Rgba, Theme};
 
-pub(crate) const MAGIC_RAW: [u8; 4] = *b"DIFR";
-// v2: `.dif` header gained a `level:u8` byte after `codec:u8`; codec id 3 (Xz)
-// removed; ids 5 (Lz4) / 6 (Lzav) added. Breaking — old readers reject v2.
-pub(crate) const VERSION: u8 = 2;
+pub(crate) const MAGIC_DIF: [u8; 8] = *b"DIF3\0\0\0\0";
+pub(crate) const MAGIC_DIFR: [u8; 8] = *b"DIFR3\0\0\0";
+pub(crate) const HEADER_LEN: usize = 64;
 
-const FLAG_GRAYSCALE: u8 = 1 << 0;
-const FLAG_DEPTH16: u8 = 1 << 1;
+/// Round `n` up to the next multiple of 16.
+pub(crate) const fn align16(n: usize) -> usize {
+    (n + 15) & !15
+}
 
-/// Serialize an image to a standalone raw `.difr` byte vector.
-pub fn to_difr(img: &DifImage) -> Result<Vec<u8>> {
-    img.validate()?;
-    let mut out = Vec::new();
-    out.extend_from_slice(&MAGIC_RAW);
-    out.push(VERSION);
-    write_body(img, &mut out);
+/// Parsed 64-byte container header.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Header {
+    pub is_raw: bool,
+    pub codec: u8,
+    pub flags: u8,
+    pub codec_palette: u8,
+    pub codec_frame: u8,
+    pub theme_count: usize,
+    pub frame_count: usize,
+    pub replay_count: u16,
+    pub width: u32,
+    pub height: u32,
+    /// First-frame offset within the (outer-decompressed) intermediate body,
+    /// measured from the file start: `long * 2^64 + offset`.
+    pub first_frame_offset: u128,
+    pub frame_alignment: u64,
+    pub index_count: u64,
+    /// Compressed length of the single palette blob (offset 56).
+    pub palette_size: u64,
+}
+
+impl Header {
+    pub fn index_width(&self) -> Result<IndexWidth> {
+        IndexWidth::from_bits(self.flags & 0b11)
+    }
+    pub fn color_depth(&self) -> Result<ColorDepth> {
+        ColorDepth::from_bits((self.flags >> 2) & 0xF)
+    }
+
+    pub fn write(&self, out: &mut Vec<u8>) {
+        let magic = if self.is_raw { MAGIC_DIFR } else { MAGIC_DIF };
+        out.extend_from_slice(&magic);
+        out.push(self.codec);
+        out.push(self.flags);
+        out.push(self.codec_palette);
+        out.push(self.codec_frame);
+        out.push((self.theme_count - 1) as u8);
+        out.push(0); // reserved
+        out.extend_from_slice(&(self.frame_count as u16).to_le_bytes());
+        out.extend_from_slice(&self.replay_count.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        out.extend_from_slice(&self.width.to_le_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        let long = (self.first_frame_offset >> 64) as u32;
+        let low = self.first_frame_offset as u64;
+        out.extend_from_slice(&long.to_le_bytes());
+        out.extend_from_slice(&low.to_le_bytes());
+        out.extend_from_slice(&self.frame_alignment.to_le_bytes());
+        out.extend_from_slice(&self.index_count.to_le_bytes());
+        out.extend_from_slice(&self.palette_size.to_le_bytes());
+        debug_assert_eq!(out.len() % HEADER_LEN, 0);
+    }
+
+    pub fn read(bytes: &[u8]) -> Result<Header> {
+        if bytes.len() < HEADER_LEN {
+            return Err(DifError::UnexpectedEof);
+        }
+        let mut magic = [0u8; 8];
+        magic.copy_from_slice(&bytes[0..8]);
+        let is_raw = if magic == MAGIC_DIF {
+            false
+        } else if magic == MAGIC_DIFR {
+            true
+        } else {
+            return Err(DifError::BadMagic(magic));
+        };
+        let theme_count = bytes[12] as usize + 1;
+        let frame_count = u16::from_le_bytes([bytes[14], bytes[15]]) as usize;
+        let replay_count = u16::from_le_bytes([bytes[16], bytes[17]]);
+        let width = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+        let height = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+        let long = u32::from_le_bytes(bytes[28..32].try_into().unwrap());
+        let low = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
+        let frame_alignment = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
+        let index_count = u64::from_le_bytes(bytes[48..56].try_into().unwrap());
+        let palette_size = u64::from_le_bytes(bytes[56..64].try_into().unwrap());
+        Ok(Header {
+            is_raw,
+            codec: bytes[8],
+            flags: bytes[9],
+            codec_palette: bytes[10],
+            codec_frame: bytes[11],
+            theme_count,
+            frame_count,
+            replay_count,
+            width,
+            height,
+            first_frame_offset: ((long as u128) << 64) | (low as u128),
+            frame_alignment,
+            index_count,
+            palette_size,
+        })
+    }
+}
+
+// --- pure section (de)serialization (the decompressed forms) --------------
+
+/// `theme_count * 4` bytes: `abilities, r, g, b` per theme.
+pub(crate) fn themes_bytes(themes: &[Theme], out: &mut Vec<u8>) {
+    for t in themes {
+        out.push(t.abilities);
+        out.push(t.base_color[0]);
+        out.push(t.base_color[1]);
+        out.push(t.base_color[2]);
+    }
+}
+
+pub(crate) fn read_themes(bytes: &[u8], count: usize) -> Result<Vec<Theme>> {
+    if bytes.len() < count * 4 {
+        return Err(DifError::UnexpectedEof);
+    }
+    let mut themes = Vec::with_capacity(count);
+    for i in 0..count {
+        let b = &bytes[i * 4..i * 4 + 4];
+        themes.push(Theme {
+            abilities: b[0],
+            base_color: [b[1], b[2], b[3]],
+        });
+    }
+    Ok(themes)
+}
+
+/// All palettes concatenated: `palettes[theme][index]` as RGBA at `depth`.
+pub(crate) fn palettes_bytes(palettes: &[Vec<Rgba>], depth: ColorDepth, out: &mut Vec<u8>) {
+    for pal in palettes {
+        for c in pal {
+            write_channel(out, c.r, depth);
+            write_channel(out, c.g, depth);
+            write_channel(out, c.b, depth);
+            write_channel(out, c.a, depth);
+        }
+    }
+}
+
+pub(crate) fn read_palettes(
+    bytes: &[u8],
+    theme_count: usize,
+    index_count: usize,
+    depth: ColorDepth,
+) -> Result<Vec<Vec<Rgba>>> {
+    let need = theme_count * index_count * depth.color_bytes();
+    if bytes.len() < need {
+        return Err(DifError::UnexpectedEof);
+    }
+    let mut pos = 0;
+    let mut palettes = Vec::with_capacity(theme_count);
+    for _ in 0..theme_count {
+        let mut pal = Vec::with_capacity(index_count);
+        for _ in 0..index_count {
+            let r = read_channel(bytes, &mut pos, depth);
+            let g = read_channel(bytes, &mut pos, depth);
+            let b = read_channel(bytes, &mut pos, depth);
+            let a = read_channel(bytes, &mut pos, depth);
+            pal.push(Rgba::new(r, g, b, a));
+        }
+        palettes.push(pal);
+    }
+    Ok(palettes)
+}
+
+/// One frame's index plane: `width*height` indices at `width`.
+pub(crate) fn frame_bitmap_bytes(indices: &[u64], width: IndexWidth, out: &mut Vec<u8>) {
+    match width {
+        IndexWidth::Eight => out.extend(indices.iter().map(|&i| i as u8)),
+        IndexWidth::Sixteen => {
+            for &i in indices {
+                out.extend_from_slice(&(i as u16).to_le_bytes());
+            }
+        }
+    }
+}
+
+pub(crate) fn read_frame_bitmap(bytes: &[u8], px: usize, width: IndexWidth) -> Result<Vec<u64>> {
+    let need = px * width.bytes();
+    if bytes.len() < need {
+        return Err(DifError::UnexpectedEof);
+    }
+    let mut out = Vec::with_capacity(px);
+    match width {
+        IndexWidth::Eight => out.extend(bytes[..px].iter().map(|&b| b as u64)),
+        IndexWidth::Sixteen => {
+            for c in bytes[..px * 2].chunks_exact(2) {
+                out.push(u16::from_le_bytes([c[0], c[1]]) as u64);
+            }
+        }
+    }
     Ok(out)
 }
 
-/// Parse a standalone raw `.difr` byte slice.
-pub fn from_difr(bytes: &[u8]) -> Result<DifImage> {
-    let mut pos = 0;
-    let magic = read_array4(bytes, &mut pos)?;
-    if magic != MAGIC_RAW {
-        return Err(DifError::BadMagic(magic));
-    }
-    let version = read_u8(bytes, &mut pos)?;
-    if version != VERSION {
-        return Err(DifError::BadVersion(version));
-    }
-    read_body(bytes, &mut pos)
-}
-
-// --- body (shared with the compressed container) -------------------------
-
-pub(crate) fn write_body(img: &DifImage, out: &mut Vec<u8>) {
-    let mut flags = 0u8;
-    if matches!(img.content, Content::Grayscale { .. }) {
-        flags |= FLAG_GRAYSCALE;
-    }
-    if img.depth == SampleDepth::Sixteen {
-        flags |= FLAG_DEPTH16;
-    }
-    out.push(flags);
-    out.extend_from_slice(&img.width.to_le_bytes());
-    out.extend_from_slice(&img.height.to_le_bytes());
-    let frame_count = img.frame_count() as u32;
-    out.extend_from_slice(&frame_count.to_le_bytes());
-    out.push(img.themes.len() as u8);
-
-    for t in &img.themes {
-        out.push(t.tag as u8);
-        let name = t.name.as_bytes();
-        out.push(name.len() as u8);
-        out.extend_from_slice(name);
-    }
-
-    // Per-frame delays (pad with zeros if the caller left them short).
-    for f in 0..frame_count as usize {
-        let d = img.frame_delays.get(f).copied().unwrap_or(0);
-        out.extend_from_slice(&d.to_le_bytes());
-    }
-
-    let depth = img.depth;
-    match &img.content {
-        Content::Indexed { palettes, frames } => {
-            let color_count = palettes[0].len() as u32;
-            varint::write(out, color_count);
-            for pal in palettes {
-                for c in pal {
-                    write_rgba(out, *c, depth);
-                }
-            }
-            for f in frames {
-                for &idx in f {
-                    varint::write(out, idx);
-                }
-            }
-        }
-        Content::Grayscale { luts, frames } => {
-            for lut in luts {
-                for &v in lut {
-                    write_sample(out, v, depth);
-                }
-            }
-            for f in frames {
-                for &s in f {
-                    write_sample(out, s, depth);
-                }
-            }
-        }
-    }
-}
-
-pub(crate) fn read_body(bytes: &[u8], pos: &mut usize) -> Result<DifImage> {
-    let flags = read_u8(bytes, pos)?;
-    let grayscale = flags & FLAG_GRAYSCALE != 0;
-    let depth = if flags & FLAG_DEPTH16 != 0 {
-        SampleDepth::Sixteen
-    } else {
-        SampleDepth::Eight
-    };
-    let width = read_u32(bytes, pos)?;
-    let height = read_u32(bytes, pos)?;
-    let frame_count = read_u32(bytes, pos)? as usize;
-    let theme_count = read_u8(bytes, pos)? as usize;
-    if theme_count == 0 || theme_count > 128 {
-        return Err(DifError::BadThemeCount(theme_count));
-    }
-
-    let mut themes = Vec::with_capacity(theme_count);
-    for _ in 0..theme_count {
-        let tag = ModeTag::from_u8(read_u8(bytes, pos)?)?;
-        let name_len = read_u8(bytes, pos)? as usize;
-        let name_bytes = read_bytes(bytes, pos, name_len)?;
-        let name = String::from_utf8(name_bytes.to_vec())
-            .map_err(|_| DifError::Invalid("theme name not UTF-8"))?;
-        themes.push(Theme { tag, name });
-    }
-
-    let mut frame_delays = Vec::with_capacity(frame_count);
-    for _ in 0..frame_count {
-        frame_delays.push(read_u16(bytes, pos)?);
-    }
-
-    let px = width as usize * height as usize;
-    let content = if grayscale {
-        let levels = depth.levels();
-        let mut luts = Vec::with_capacity(theme_count);
-        for _ in 0..theme_count {
-            let mut lut = Vec::with_capacity(levels);
-            for _ in 0..levels {
-                lut.push(read_sample(bytes, pos, depth)?);
-            }
-            luts.push(lut);
-        }
-        let mut frames = Vec::with_capacity(frame_count);
-        for _ in 0..frame_count {
-            let mut f = Vec::with_capacity(px);
-            for _ in 0..px {
-                f.push(read_sample(bytes, pos, depth)?);
-            }
-            frames.push(f);
-        }
-        Content::Grayscale { luts, frames }
-    } else {
-        let color_count = varint::read(bytes, pos)? as usize;
-        let mut palettes = Vec::with_capacity(theme_count);
-        for _ in 0..theme_count {
-            let mut pal = Vec::with_capacity(color_count);
-            for _ in 0..color_count {
-                pal.push(read_rgba(bytes, pos, depth)?);
-            }
-            palettes.push(pal);
-        }
-        let mut frames = Vec::with_capacity(frame_count);
-        for _ in 0..frame_count {
-            let mut f = Vec::with_capacity(px);
-            for _ in 0..px {
-                f.push(varint::read(bytes, pos)?);
-            }
-            frames.push(f);
-        }
-        Content::Indexed { palettes, frames }
-    };
-
-    let img = DifImage {
-        width,
-        height,
-        depth,
-        themes,
-        content,
-        frame_delays,
-    };
-    img.validate()?;
-    Ok(img)
-}
-
-// --- primitive readers/writers -------------------------------------------
-
-fn write_sample(out: &mut Vec<u8>, v: u16, depth: SampleDepth) {
+fn write_channel(out: &mut Vec<u8>, v: u16, depth: ColorDepth) {
     match depth {
-        SampleDepth::Eight => out.push(v as u8),
-        SampleDepth::Sixteen => out.extend_from_slice(&v.to_le_bytes()),
+        ColorDepth::Rgba8 => out.push(v as u8),
+        ColorDepth::Rgba16 => out.extend_from_slice(&v.to_le_bytes()),
     }
 }
 
-fn write_rgba(out: &mut Vec<u8>, c: Rgba, depth: SampleDepth) {
-    write_sample(out, c.r, depth);
-    write_sample(out, c.g, depth);
-    write_sample(out, c.b, depth);
-    write_sample(out, c.a, depth);
-}
-
-fn read_sample(bytes: &[u8], pos: &mut usize, depth: SampleDepth) -> Result<u16> {
+fn read_channel(bytes: &[u8], pos: &mut usize, depth: ColorDepth) -> u16 {
     match depth {
-        SampleDepth::Eight => Ok(read_u8(bytes, pos)? as u16),
-        SampleDepth::Sixteen => read_u16(bytes, pos),
-    }
-}
-
-fn read_rgba(bytes: &[u8], pos: &mut usize, depth: SampleDepth) -> Result<Rgba> {
-    Ok(Rgba {
-        r: read_sample(bytes, pos, depth)?,
-        g: read_sample(bytes, pos, depth)?,
-        b: read_sample(bytes, pos, depth)?,
-        a: read_sample(bytes, pos, depth)?,
-    })
-}
-
-fn read_u8(bytes: &[u8], pos: &mut usize) -> Result<u8> {
-    let v = *bytes.get(*pos).ok_or(DifError::UnexpectedEof)?;
-    *pos += 1;
-    Ok(v)
-}
-
-fn read_u16(bytes: &[u8], pos: &mut usize) -> Result<u16> {
-    let s = read_bytes(bytes, pos, 2)?;
-    Ok(u16::from_le_bytes([s[0], s[1]]))
-}
-
-fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32> {
-    let s = read_bytes(bytes, pos, 4)?;
-    Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
-fn read_array4(bytes: &[u8], pos: &mut usize) -> Result<[u8; 4]> {
-    let s = read_bytes(bytes, pos, 4)?;
-    Ok([s[0], s[1], s[2], s[3]])
-}
-
-fn read_bytes<'a>(bytes: &'a [u8], pos: &mut usize, n: usize) -> Result<&'a [u8]> {
-    let end = pos.checked_add(n).ok_or(DifError::UnexpectedEof)?;
-    let s = bytes.get(*pos..end).ok_or(DifError::UnexpectedEof)?;
-    *pos = end;
-    Ok(s)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn indexed_2x2_two_themes() -> DifImage {
-        // light: black on white; dark: white on black.
-        let light = vec![Rgba::new(255, 255, 255, 255), Rgba::new(0, 0, 0, 255)];
-        let dark = vec![Rgba::new(0, 0, 0, 255), Rgba::new(255, 255, 255, 255)];
-        DifImage {
-            width: 2,
-            height: 2,
-            depth: SampleDepth::Eight,
-            themes: vec![
-                Theme {
-                    tag: ModeTag::Light,
-                    name: "light".into(),
-                },
-                Theme {
-                    tag: ModeTag::Dark,
-                    name: "dark".into(),
-                },
-            ],
-            content: Content::Indexed {
-                palettes: vec![light, dark],
-                frames: vec![vec![0, 1, 1, 0]],
-            },
-            frame_delays: vec![0],
+        ColorDepth::Rgba8 => {
+            let v = bytes[*pos] as u16;
+            *pos += 1;
+            v
         }
-    }
-
-    fn grayscale_2x2() -> DifImage {
-        let levels = SampleDepth::Eight.levels();
-        let identity: Vec<u16> = (0..levels as u16).collect();
-        let inverted: Vec<u16> = (0..levels as u16).map(|v| 255 - v).collect();
-        DifImage {
-            width: 2,
-            height: 2,
-            depth: SampleDepth::Eight,
-            themes: vec![
-                Theme {
-                    tag: ModeTag::Light,
-                    name: "light".into(),
-                },
-                Theme {
-                    tag: ModeTag::Dark,
-                    name: "dark".into(),
-                },
-            ],
-            content: Content::Grayscale {
-                luts: vec![identity, inverted],
-                frames: vec![vec![10, 200, 0, 255]],
-            },
-            frame_delays: vec![0],
+        ColorDepth::Rgba16 => {
+            let v = u16::from_le_bytes([bytes[*pos], bytes[*pos + 1]]);
+            *pos += 2;
+            v
         }
-    }
-
-    #[test]
-    fn difr_roundtrip_indexed() {
-        let img = indexed_2x2_two_themes();
-        let bytes = to_difr(&img).unwrap();
-        assert_eq!(&bytes[..4], b"DIFR");
-        let back = from_difr(&bytes).unwrap();
-        assert_eq!(img, back);
-    }
-
-    #[test]
-    fn difr_roundtrip_grayscale() {
-        let img = grayscale_2x2();
-        let back = from_difr(&to_difr(&img).unwrap()).unwrap();
-        assert_eq!(img, back);
-    }
-
-    #[test]
-    fn difr_roundtrip_16bit_indexed() {
-        let mut img = indexed_2x2_two_themes();
-        img.depth = SampleDepth::Sixteen;
-        if let Content::Indexed { palettes, .. } = &mut img.content {
-            palettes[0][0] = Rgba::new(65535, 1000, 0, 65535);
-        }
-        let back = from_difr(&to_difr(&img).unwrap()).unwrap();
-        assert_eq!(img, back);
-    }
-
-    #[test]
-    fn render_picks_dark_theme() {
-        let img = indexed_2x2_two_themes();
-        // frame = [0,1,1,0]; dark palette: idx0=black, idx1=white.
-        let rgba = img.render_rgba8(ModeTag::Dark, 0).unwrap();
-        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]); // pixel 0 -> idx0 -> black
-        assert_eq!(&rgba[4..8], &[255, 255, 255, 255]); // pixel 1 -> idx1 -> white
-    }
-
-    #[test]
-    fn render_grayscale_inverts_on_dark() {
-        let img = grayscale_2x2();
-        let light = img.render_rgba8(ModeTag::Light, 0).unwrap();
-        let dark = img.render_rgba8(ModeTag::Dark, 0).unwrap();
-        assert_eq!(light[0], 10); // identity
-        assert_eq!(dark[0], 245); // 255 - 10
-    }
-
-    #[test]
-    fn bad_magic_rejected() {
-        let mut bytes = to_difr(&indexed_2x2_two_themes()).unwrap();
-        bytes[0] = b'X';
-        assert!(matches!(from_difr(&bytes), Err(DifError::BadMagic(_))));
     }
 }
