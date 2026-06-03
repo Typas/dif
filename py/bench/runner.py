@@ -16,7 +16,7 @@ from pathlib import Path
 
 from dif_tools import image_to_dif_image
 
-from .codecs import all_codecs, dif_codecs
+from .codecs import all_codecs
 from .metric import compute_m, memcpy_speed, speed
 
 
@@ -78,9 +78,9 @@ def bench_image(
         f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} |"
     )
     results: list[CodecResult] = []
-    # `dif_codecs(numthreads)` is empty unless numthreads > 1, when it adds the
-    # rust `.dif` multithread-encode probe (verified by the roundtrip check below).
-    for codec in all_codecs() + dif_codecs(numthreads):
+    # Standalone algorithms only (no DIF container). `numthreads > 1` selects each
+    # codec's multithreaded encoder where it has one (else single-thread).
+    for codec in all_codecs(numthreads):
         if not codec.available:
             print(f"-- WARN: {codec.name} is not available, skipped")
             results.append(

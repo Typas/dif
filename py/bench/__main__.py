@@ -54,7 +54,7 @@ def _images(passed: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("setup", help="build optional native codecs (lzav)")
+    sub.add_parser("setup", help="build optional native codecs (lzav, kanzi, zxc)")
     c = sub.add_parser("codecs", help="rank codecs over .difr by M")
     c.add_argument("images", nargs="*")
     c.add_argument("--strategy", default="arithmetic")
@@ -63,8 +63,8 @@ def main(argv: list[str] | None = None) -> int:
         "--numthreads",
         type=int,
         default=1,
-        help="codec threads (default 1). >1 adds rust dif-{codec}/-mt rows that "
-        "probe and roundtrip-verify the multithreaded .dif encode path",
+        help="codec threads (default 1 = single-thread). >1 uses each codec's "
+        "multithreaded encoder where it has one (zstd, zxc), else single-thread",
     )
     c.add_argument(
         "--out",
@@ -89,10 +89,25 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument(
         "--dif-codecs",
         nargs="+",
-        choices=DIF_CODECS,
         default=list(DIF_CODECS),
         metavar="VARIANT",
-        help="DIF codec variants to compare (default: all)",
+        help="outer DIF codec variants to compare (default: the study set)",
+    )
+    f.add_argument(
+        "--dif-palette-codecs",
+        nargs="+",
+        default=None,
+        metavar="VARIANT",
+        help="palette-section codecs (default: inherit the outer codec); a list "
+        "runs the cartesian product with --dif-codecs",
+    )
+    f.add_argument(
+        "--dif-frame-codecs",
+        nargs="+",
+        default=None,
+        metavar="VARIANT",
+        help="frame-section codecs (default: inherit the outer codec); a list "
+        "runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
         "--out",
@@ -111,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         print("lzav shim:", "built" if lz else "FAILED (needs cc + network)")
         kz = native.build_kanzi()
         print("kanzi shim:", "built" if kz else "FAILED (needs cargo + git + network)")
+        zx = native.build_zxc()
+        print("zxc shim:", "built" if zx else "FAILED (needs cc + git + network)")
         return 0
 
     imgs = _images(args.images)
@@ -156,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
                     p,
                     args.repeats,
                     args.dif_codecs,
+                    args.dif_palette_codecs,
+                    args.dif_frame_codecs,
                     stream=True,
                     numthreads=args.numthreads,
                 )

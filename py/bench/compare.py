@@ -26,10 +26,9 @@ from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import speed
 
-# The study's codec variants (docs/plan.md). `DIF_BASELINE` names the shipped default
-# codec; `REL_REF` is the `rel` reference column — every format's size is reported
-# relative to it (PNG, the universal lossless baseline). `zstd-22` is zstd's max
-# (ultra) level: slow/CPU-bound, the zstd analogue to brotli-11 for the `-mt` probe.
+# The study's outer codec variants (docs/plan.md). `DIF_BASELINE` names the shipped
+# default codec; `REL_REF` is the `rel` reference column — every format's size is
+# reported relative to it (PNG, the universal lossless baseline).
 DIF_CODECS: tuple[str, ...] = (
     "zstd-3",
     "zstd-10",
@@ -42,6 +41,52 @@ DIF_CODECS: tuple[str, ...] = (
 )
 DIF_BASELINE = "zstd-3"
 REL_REF = "png"  # `rel` column reference format
+
+# Compact codec abbreviations for the DIF row labels.
+_FAMILY_ABBR = {
+    "deflate": "PK",
+    "libdeflate": "PK",
+    "brotli": "br",
+    "zxc": "zxc",
+    "zstd": "zst",
+    "lzav": "av",
+}
+# Bare-family aliases resolve to their study-default level for display.
+_DEFAULT_LEVEL = {
+    "deflate": "6",
+    "libdeflate": "6",
+    "brotli": "5",
+    "zxc": "3",
+    "zstd": "3",
+    "lzav": "1",
+}
+
+
+def _abbr(variant: str) -> str:
+    """Abbreviate a codec variant, e.g. zstd-3->zst3, lz4-fast1->4f1,
+    lz4-hc9->4hc9, libdeflate-6->PK6, store->st."""
+    if variant == "store":
+        return "st"
+    if variant.startswith("lz4"):
+        rest = variant[3:].lstrip("-")
+        if rest.startswith("fast"):
+            return "4f" + rest[4:]
+        if rest.startswith("hc"):
+            return "4hc" + rest[2:]
+        return "4f1"  # bare "lz4"
+    fam, _, lvl = variant.partition("-")
+    base = _FAMILY_ABBR.get(fam)
+    if base is None:
+        return variant  # unknown — show verbatim (e.g. a typo'd codec)
+    return base + (lvl or _DEFAULT_LEVEL[fam])
+
+
+def _dif_label(outer: str, palette: str, frame: str) -> str:
+    """`dif-<outer>` when palette/frame inherit the outer codec, else
+    `dif-<outer>-<palette>-<frame>`."""
+    if palette == outer and frame == outer:
+        return f"dif-{_abbr(outer)}"
+    return f"dif-{_abbr(outer)}-{_abbr(palette)}-{_abbr(frame)}"
 
 
 @dataclass
@@ -88,6 +133,8 @@ def compare_image(
     path: str | Path,
     repeats: int = 3,
     dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
+    palette_codecs: tuple[str, ...] | list[str] | None = None,
+    frame_codecs: tuple[str, ...] | list[str] | None = None,
     stream: bool = False,
     numthreads: int = 1,
 ) -> list[FormatResult]:
@@ -122,9 +169,15 @@ def compare_image(
     # dark-theme synthesis run inside the closure (parity with png_encode(arr),
     # which encodes the raw array). `arr` is already in memory, so no file I/O
     # is timed. `decode` renders one theme back to pixels (file -> bitmap).
-    def dif_enc(strategy: str, codec: str, workers: int = 0):
+    # The whole `.dif` is encoded all-mt or all-st: workers come from --numthreads.
+    workers = numthreads if numthreads > 1 else 0
+
+    def dif_enc(strategy: str, outer: str, palette: str, frame: str):
         return lambda: dif_image_from_array(arr, strategy).to_dif(
-            cast("dif.CodecName", codec), workers=workers
+            cast("dif.CodecName", outer),
+            cast("dif.CodecName", palette),
+            cast("dif.CodecName", frame),
+            workers=workers,
         )
 
     def dif_dec(b: bytes):
@@ -141,25 +194,26 @@ def compare_image(
     # Headline row: the shipped default (zstd-3) carrying *both* themes
     # (light + dark) — the real `.dif` product, not directly size-comparable to
     # the single-image formats below.
-    emit(f"dif-{DIF_BASELINE}-2t", dif_enc("arithmetic", DIF_BASELINE), dif_dec, None)
+    emit(
+        f"{_dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE)}-2t",
+        dif_enc("arithmetic", DIF_BASELINE, DIF_BASELINE, DIF_BASELINE),
+        dif_dec,
+        None,
+    )
 
-    # Codec comparison: one theme each, apples-to-apples with the single-image
-    # formats (png/gif/webp/jxl/avif). DIF losslessness is covered in tests.
-    for codec in dif_codecs:
-        emit(f"dif-{codec}", dif_enc("keep", codec), dif_dec, None)
-
-    # Multithreaded encode (`-mt`): same standard container, decoded single-
-    # thread, so it charts the enc-speed/size tradeoff of workers > 1. zstd
-    # (nbWorkers) and brotli (compress_multi) carry native workers; zstd barely
-    # splits at diagram sizes, but the slow brotli levels scale ~linearly.
-    if numthreads > 1:
-        for codec in dif_codecs:
-            if codec.startswith(("zstd-", "brotli-")):
+    # Codec comparison: one theme each (apples-to-apples with the single-image
+    # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --numthreads.
+    # palette/frame default to inheriting the outer codec; given lists run the
+    # cartesian product. DIF losslessness is covered in tests.
+    pcs = list(palette_codecs) if palette_codecs else [None]
+    fcs = list(frame_codecs) if frame_codecs else [None]
+    for outer in dif_codecs:
+        for pal in pcs:
+            for frm in fcs:
+                p = outer if pal is None else pal
+                f = outer if frm is None else frm
                 emit(
-                    f"dif-{codec}-mt",
-                    dif_enc("keep", codec, numthreads),
-                    dif_dec,
-                    None,
+                    _dif_label(outer, p, f), dif_enc("keep", outer, p, f), dif_dec, None
                 )
 
     # avif/jxl pinned to their library's *native default* effort knob so the
