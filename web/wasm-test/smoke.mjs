@@ -12,8 +12,8 @@ await init({ module_or_path: wasm });
 const dif = await readFile(new URL("../demo/flowchart.dif", import.meta.url));
 const img = Image.fromBytes(new Uint8Array(dif));
 
-const themes = img.themeNames().split("\n").filter(Boolean);
-const rgba = img.render("light", 0);
+const themes = img.themesDescription().split("\n").filter(Boolean);
+const rgba = img.render("light", 255, 255, 255, 0);
 
 function check(cond, msg) {
   if (!cond) {
@@ -24,7 +24,7 @@ function check(cond, msg) {
 
 check(img.width > 0, `width=${img.width}`);
 check(img.height > 0, `height=${img.height}`);
-check(themes.length > 0, "no theme names");
+check(themes.length > 0, "no themes");
 check(
   rgba.length === 4 * img.width * img.height,
   `render len ${rgba.length} != ${4 * img.width * img.height}`,

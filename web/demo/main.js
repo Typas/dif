@@ -6,6 +6,15 @@ import init, { Image } from "../../dist/pkg/dif_wasm.js";
 
 const DIF_URL = "./flowchart.dif";
 
+// Parse a CSS color like "rgb(18, 18, 18)" / "rgba(...)" into [r,g,b]. The host
+// background tie-breaks between equally-capable themes (v3 pick_theme).
+function parseRgb(css, fallback) {
+  const m = /rgba?\(([^)]+)\)/.exec(css || "");
+  if (!m) return fallback;
+  const p = m[1].split(",").map((s) => parseInt(s.trim(), 10));
+  return p.length >= 3 && p.every((n) => Number.isFinite(n)) ? [p[0], p[1], p[2]] : fallback;
+}
+
 async function main() {
   await init();
 
@@ -23,7 +32,7 @@ async function main() {
 
   const modeLabel = document.getElementById("mode");
   const info = document.getElementById("info");
-  info.textContent = `${img.width}×${img.height}, themes: ${img.themeNames().split("\n").join(", ")}`;
+  info.textContent = `${img.width}×${img.height}, themes: ${img.themesDescription().split("\n").join(", ")}`;
 
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   let override = null; // null = follow OS; otherwise "light" | "dark"
@@ -33,12 +42,51 @@ async function main() {
     return media.matches ? "dark" : "light";
   }
 
-  function draw() {
-    const mode = currentMode();
-    const rgba = img.render(mode, 0);
+  // The host background color: the page's computed background, falling back to a
+  // sensible default per appearance.
+  function hostBase(mode) {
+    const fallback = mode === "dark" ? [0, 0, 0] : [255, 255, 255];
+    return parseRgb(getComputedStyle(document.body).backgroundColor, fallback);
+  }
+
+  // Animation: cycle frames honoring per-frame µs delays and replay_count
+  // (0 = infinite). A single frame (or all-zero delays) just paints once.
+  let timer = null;
+  let loopsLeft = img.replayCount; // 0 => infinite
+
+  function paint(mode, base, frame) {
+    const [r, g, b] = base;
+    const rgba = img.render(mode, r, g, b, frame);
     const data = new ImageData(new Uint8ClampedArray(rgba), img.width, img.height);
     ctx.putImageData(data, 0, 0);
     modeLabel.textContent = mode + (override ? " (override)" : "");
+  }
+
+  function draw() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const mode = currentMode();
+    const base = hostBase(mode);
+    const n = img.frameCount;
+    if (n <= 1) {
+      paint(mode, base, 0);
+      return;
+    }
+    loopsLeft = img.replayCount;
+    let frame = 0;
+    const step = () => {
+      paint(mode, base, frame);
+      const delayMs = Math.max(img.frameDelay(frame) / 1000, 16);
+      frame += 1;
+      if (frame >= n) {
+        frame = 0;
+        if (img.replayCount !== 0 && --loopsLeft <= 0) return; // finished
+      }
+      timer = setTimeout(step, delayMs);
+    };
+    step();
   }
 
   media.addEventListener("change", draw);
