@@ -1,11 +1,13 @@
 # DIF — Modern Diagram Image Format (`.dif`)
 
 A lossless, palette-based image format built for **diagrams** and **theme-aware
-display**. Like GIF it maps pixels through a colour palette, but each colour
-carries one entry *per named theme* (e.g. `light` / `dark`), so a single file
-re-themes itself to match the browser or editor instead of staying a fixed
-bitmap. Grayscale (8/16-bit) and APNG/GIF-style frames are supported, and the
-compressed `.dif` body uses one of 8 study-chosen lossless codecs.
+display**. Like GIF it maps pixels through a colour palette, but each palette is
+tagged with the host appearances it can display under (`light` / `dark` /
+`high-contrast`), so a single file re-themes itself to match the browser or
+editor instead of staying a fixed bitmap. The index plane is constant-width
+(8/16-bit), the mapped colour is RGBA8/RGBA16, APNG/GIF-style frames are
+supported, and the `.dif` body uses a two-stage codec (per-palette + per-frame
+sections under an outer pass) drawn from a study-chosen lossless set.
 
 - Format spec: [`docs/spec/dif-spec.typ`](docs/spec/dif-spec.typ)
 - Design + worklog: [`docs/plan.md`](docs/plan.md), [`docs/plan-format-codecs.md`](docs/plan-format-codecs.md)
