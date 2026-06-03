@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .codecs import Codec
 
-_ROOT = Path(__file__).parent.parent
+_ROOT = Path(__file__).parent.parent.parent
 _NATIVE_DIR = Path(__file__).parent / "_native"
 _LZAV_HEADER_URL = "https://raw.githubusercontent.com/avaneev/lzav/master/lzav.h"
 _LZAV_SO = _NATIVE_DIR / "liblzavshim.so"

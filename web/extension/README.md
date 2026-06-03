@@ -10,7 +10,7 @@ From the repository root:
 
 ```sh
 just ext-build              # stage the wasm decoder + compile the TypeScript
-just ext-package            # build dif-viewer.vsix into the repo root
+just ext-package            # build dif-viewer.vsix into dist/
 just ext-install            # package + install via `code` (default)
 just ext-install codium     # ...or another editor binary: codium, cursor, ...
 ```

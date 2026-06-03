@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
 
     imgs = _images(args.images)
     if not imgs:
-        print("no images; pass image files or a directory, e.g. testdata/")
+        print("no images; pass image files or a directory, e.g. data/testdata/")
         return 1
 
     if args.cmd == "codecs":

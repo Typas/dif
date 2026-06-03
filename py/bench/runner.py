@@ -2,7 +2,7 @@
 
 Each image is benchmarked on its own (one table per image); the harness then
 rolls those per-image results up into one aggregate per directory, recursively,
-so a whole tree like ``testdata/`` yields a stat block for every subdirectory.
+so a whole tree like ``data/testdata/`` yields a stat block for every subdirectory.
 """
 
 from __future__ import annotations

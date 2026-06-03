@@ -18,7 +18,7 @@ from pathlib import Path
 
 import dif
 
-_DIF = Path(__file__).parent / "flowchart.dif"
+_DIF = Path(__file__).resolve().parent.parent / "web" / "demo" / "flowchart.dif"
 # The v1 brotli stream was produced at quality 9; record it as the level byte
 # (informational only — decode is level-agnostic).
 _BROTLI_LEVEL = 9

@@ -7,7 +7,7 @@ re-themes itself to match the browser or editor instead of staying a fixed
 bitmap. Grayscale (8/16-bit) and APNG/GIF-style frames are supported, and the
 compressed `.dif` body uses one of 8 study-chosen lossless codecs.
 
-- Format spec: [`spec/dif-spec.typ`](spec/dif-spec.typ)
+- Format spec: [`docs/spec/dif-spec.typ`](docs/spec/dif-spec.typ)
 - Design + worklog: [`docs/plan.md`](docs/plan.md), [`docs/plan-format-codecs.md`](docs/plan-format-codecs.md)
 
 ## Repo layout
@@ -18,19 +18,22 @@ compressed `.dif` body uses one of 8 study-chosen lossless codecs.
 | `crates/dif-py/`                          | Python extension (`dif`), built with maturin                                                     |
 | `crates/dif-wasm/`                        | Browser decoder (wasm)                                                                           |
 | `crates/lzav-shim/`, `crates/kanzi-shim/` | C-codec shims for the benchmark                                                                  |
-| `dif_tools/`                              | Python converters: image/`.drawio` → `.dif`                                                      |
-| `bench/`                                  | Codec + format benchmark harness                                                                 |
-| `web/`                                    | In-browser viewer (theme-aware)                                                                  |
-| `extension/`                              | VS Codium extension                                                                              |
-| `spec/`                                   | Typst format spec                                                                                |
-| `testdata/`                               | Sample diagrams + photos (git-LFS)                                                               |
+| `py/dif_tools/`                           | Python converters: image/`.drawio` → `.dif`                                                      |
+| `py/bench/`                               | Codec + format benchmark harness                                                                 |
+| `py/tests/`                               | Python test suite                                                                                |
+| `web/demo/`                               | In-browser viewer (theme-aware)                                                                  |
+| `web/extension/`                          | VS Codium extension                                                                              |
+| `web/wasm-test/`                          | node smoke test for the wasm decoder                                                             |
+| `docs/`                                   | Typst spec (`docs/spec/`), design docs, benchmark reports                                        |
+| `data/`                                   | Sample diagrams + photos (`testdata/`), example `.dif`s (git-LFS)                                |
+| `third_party/`                            | Vendored drawio (submodule)                                                                      |
 
 ## Prerequisites
 
 - [`uv`](https://docs.astral.sh/uv/) — all Python tasks (project pins 3.12).
 - Rust toolchain (`cargo`) — the core and bindings.
 - [`just`](https://github.com/casey/just) — task runner (recipes below).
-- `git-lfs` — `testdata/` images and `*.tsv` reports are LFS-tracked.
+- `git-lfs` — `data/testdata/` images and `*.tsv` reports are LFS-tracked.
 - Optional: `podman` + `pnpm` (`.drawio` rendering / extension), `typst` (spec),
   a C compiler (`cc`) and network (benchmark `lzav`/`kanzi` shims).
 
@@ -45,7 +48,8 @@ just test
 just py
 
 # 3. Convert an image (or a .drawio) to a themed .dif.
-uv run python -m dif_tools convert testdata/usc-sipi-misc/4.1.01.tiff out.dif
+#    (py/ holds the Python packages, so put it on the path.)
+PYTHONPATH=py uv run python -m dif_tools convert data/testdata/usc-sipi-misc/4.1.01.tiff out.dif
 #   --codec zstd-3|zstd-10|brotli-5|brotli-11|lz4-fast1|lzav-1|libdeflate-6|store
 #   --theme-strategy arithmetic|invert|keep   (how the dark theme is derived)
 #   --raw                                     (write uncompressed .difr instead)
@@ -55,8 +59,9 @@ just py-test
 
 # 5. (Optional) View in the browser, theme-aware.
 just wasm-setup   # one-time toolchain
-just wasm         # build the decoder into web/pkg
-#   then serve web/ and open it; the page picks light/dark from the browser.
+just wasm         # build the decoder into dist/pkg
+#   then serve the repo root and open web/demo/ (the page loads ../../dist/pkg);
+#   it picks light/dark from the browser.
 ```
 
 A bare `just` (or `just --list`) prints every recipe.
@@ -93,15 +98,15 @@ A bare `just` (or `just --list`) prints every recipe.
 |--------------|--------------------------------------------------------------------------------------------------------------------|
 | `py`         | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
 | `wasm-setup` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
-| `wasm`       | Build the browser decoder into `web/pkg` (all 8 codecs cross-compiled via `zig cc`).                               |
-| `wasm-test`  | Smoke-test the decoder in node: decode `web/flowchart.dif` (run `wasm` first; skips without node).                 |
+| `wasm`       | Build the browser decoder into `dist/pkg` (all 8 codecs cross-compiled via `zig cc`).                              |
+| `wasm-test`  | Smoke-test the decoder in node: decode `web/demo/flowchart.dif` (run `wasm` first; skips without node).            |
 | `regen-demo` | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
 
 ### VS Code / Codium / Cursor extension
 | Recipe                  | Does                                                                                                                |
 |-------------------------|---------------------------------------------------------------------------------------------------------------------|
-| `ext-build`             | Stage the wasip1 decoder (all 8 codecs) + wasi shim into `extension/media/`, then compile the TypeScript.           |
-| `ext-package`           | Build `dif-viewer.vsix` into the repo root.                                                                         |
+| `ext-build`             | Stage the wasip1 decoder (all 8 codecs) + wasi shim into `web/extension/media/`, then compile the TypeScript.       |
+| `ext-package`           | Build `dif-viewer.vsix` into `dist/`.                                                                               |
 | `ext-install [variant]` | Package, then install via the editor CLI — `variant` is the binary on PATH: `code` (default), `codium`, `cursor`, … |
 | `ext-test`              | Typecheck the extension TypeScript (`tsc -p`; skips without node/pnpm).                                             |
 
@@ -145,9 +150,9 @@ reported as unavailable, the rest of the harness still runs.
 
 ### `bench-codecs` — rank codecs over the `.difr` body
 ```sh
-just bench-codecs testdata/                       # whole tree
+just bench-codecs data/testdata/                  # whole tree
 just bench-codecs img.png --repeats 5 --strategy arithmetic
-just bench-codecs testdata/ --numthreads 4        # adds the rust mt probe
+just bench-codecs data/testdata/ --numthreads 4   # adds the rust mt probe
 ```
 Encodes each image to a raw `.difr` body, then compresses that body with **every
 registered codec** (deflate, brotli, bzip3, lz4/lz4hc, zstd, lzav, kanzi…) and
@@ -169,8 +174,8 @@ roundtrip check, the only place that mt path is verified) · `--out`
 
 ### `bench-formats` — compare `.dif` against other image formats
 ```sh
-just bench-formats testdata/
-just bench-formats testdata/ --numthreads 4       # parallel jxl/avif/brotli + dif -mt rows
+just bench-formats data/testdata/
+just bench-formats data/testdata/ --numthreads 4  # parallel jxl/avif/brotli + dif -mt rows
 just bench-formats img.png --dif-codecs zstd-3 brotli-11
 ```
 Renders each input (including `.drawio` → PNG once, cached) to a common raster,

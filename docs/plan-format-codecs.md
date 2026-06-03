@@ -24,8 +24,8 @@ acceleration ranges up to ~2⁷, so a full `u8` level is wanted. One byte each.
 The layout change is breaking, so **bump `VERSION`** (`crates/dif-core/src/format.rs`).
 No long-lived persisted `.dif` corpus exists, so no migration path is needed —
 old readers should reject the new version. **One committed asset must be
-regenerated**: `web/flowchart.dif` (the demo the wasm viewer loads); add a step
-to re-encode it after the format change so `web/` keeps working.
+regenerated**: `web/demo/flowchart.dif` (the demo the wasm viewer loads); add a
+step to re-encode it after the format change so `web/demo/` keeps working.
 
 Decode for zstd / brotli / deflate / lz4 does **not** need the level (the
 compressed stream is self-describing), so the stored `level` is informational +
@@ -132,7 +132,7 @@ the native Python path.
   narrow the set. Relative-size column (`rel`) keys off a chosen baseline (e.g.
   `dif-zstd-3`).
 
-### 5. spec — `spec/dif-spec.typ`
+### 5. spec — `docs/spec/dif-spec.typ`
 - Document the new 15-byte header with the `level:u8` field after `codec:u8`.
 - Document codec bytes 5 (Lz4) and 6 (Lzav); state that `level` is recorded for
   provenance/forward-compat but is **not consumed by decode**.

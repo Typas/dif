@@ -57,7 +57,7 @@ def test_render_raises_without_renderer(monkeypatch, tmp_path):
 
 _PODMAN = shutil.which("podman") or shutil.which("docker")
 _HAVE_IMAGE = bool(_PODMAN) and drawio._image_present(_PODMAN)
-_SAMPLE = drawio._REPO_ROOT / "testdata" / "drawio" / "C4.drawio"
+_SAMPLE = drawio._REPO_ROOT / "data" / "testdata" / "drawio" / "C4.drawio"
 
 
 @pytest.mark.slow

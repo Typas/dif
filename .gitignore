@@ -16,19 +16,19 @@ htmlcov/
 # Node / wasm
 node_modules/
 crates/dif-wasm/pkg/
-web/pkg/
-extension/media/pkg/
-extension/media/wasi_shim.js
-extension/out/
+web/extension/media/pkg/
+web/extension/media/wasi_shim.js
+web/extension/out/
 *.vsix
+/dist/
 
 # Generated artifacts
 *.dif
 *.difr
-!testdata/**/*.dif
-!testdata/**/*.difr
-!web/*.dif
-!dif-examples/**/*.dif
+!data/testdata/**/*.dif
+!data/testdata/**/*.difr
+!web/demo/*.dif
+!data/dif-examples/**/*.dif
 
 # Generated artifacts (rendered PNGs, converted files, bench scratch)
 /out/
@@ -36,7 +36,8 @@ extension/out/
 # Benchmark output / built native shims
 bench-codecs.tsv
 bench-codecs-*.tsv
-bench/results/
-bench/_native/
+bench-report.md
+py/bench/results/
+py/bench/_native/
 crates/kanzi-shim/vendor/
 crates/kanzi-shim/Cargo.lock

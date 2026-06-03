@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _WORK = Path("/tmp") / "drawio-work"
 
 IMAGE = "docker.io/rlespinasse/drawio-export:v4.52.0"

@@ -8,6 +8,10 @@
 # drawio-, bench-, py-, spec). Cross-component aggregates are bare verbs
 # (default, test-all, ci, clean, regen-demo).
 
+# Python packages live under py/; put it on sys.path for `python -m ...` recipes
+# (pytest gets it via tool.pytest pythonpath).
+export PYTHONPATH := justfile_directory() / "py"
+
 default:
     @just --list
 
@@ -77,31 +81,31 @@ wasm-setup:
 # (cargo-zigbuild) against wasi-libc, so the browser decodes all 8 variants —
 # including the default zstd-3 — not just the pure-Rust store/deflate/brotli/lz4
 # set. wasm-bindgen then emits the JS glue. The wasip1 module needs a small wasi
-# shim in the loader (see web/main.js). Run `just wasm-setup` once first.
-# Build the wasm decoder into web/pkg (all 8 codecs, cross-compiled via zig cc).
+# shim in the loader (see web/demo/main.js). Run `just wasm-setup` once first.
+# Build the wasm decoder into dist/pkg (all 8 codecs, cross-compiled via zig cc).
 wasm:
     uv run cargo-zigbuild build --release --target wasm32-wasip1 \
         --manifest-path crates/dif-wasm/Cargo.toml
     wasm-bindgen target/wasm32-wasip1/release/dif_wasm.wasm \
-        --target web --out-dir "$PWD/web/pkg"
+        --target web --out-dir "$PWD/dist/pkg"
 
-# Load web/pkg + the wasi shim and decode web/flowchart.dif. Node has no import
-# maps, so a resolve hook wires the glue's bare `wasi_snapshot_preview1` import
-# to web/wasi_shim.js. Run `just wasm` first to build web/pkg.
+# Load dist/pkg + the wasi shim and decode web/demo/flowchart.dif. Node has no
+# import maps, so a resolve hook wires the glue's bare `wasi_snapshot_preview1`
+# import to web/demo/wasi_shim.js. Run `just wasm` first to build dist/pkg.
 #
-# Smoke-test the wasm decoder in node (skips without node or web/pkg).
+# Smoke-test the wasm decoder in node (skips without node or dist/pkg).
 wasm-test:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v node >/dev/null || { echo "skip wasm-test: no node"; exit 0; }
-    [ -f web/pkg/dif_wasm.js ] || { echo "skip wasm-test: web/pkg missing (run just wasm)"; exit 0; }
-    node --import "{{justfile_directory()}}/tests/wasm/wasi-resolve.mjs" \
-        "{{justfile_directory()}}/tests/wasm/smoke.mjs"
+    [ -f dist/pkg/dif_wasm.js ] || { echo "skip wasm-test: dist/pkg missing (run just wasm)"; exit 0; }
+    node --import "{{justfile_directory()}}/web/wasm-test/wasi-resolve.mjs" \
+        "{{justfile_directory()}}/web/wasm-test/smoke.mjs"
 
 # Re-emit the committed demo asset for the current .dif format (run `just py`
 # first so the `dif` module exists). Needed after a container format bump.
 regen-demo:
-    uv run python web/regen_flowchart.py
+    uv run python py/regen_flowchart.py
 
 # --- VSCodium / VS Code extension -----------------------------------------
 # The extension reuses the wasip1 decoder built by `just wasm` (all 8 codecs)
@@ -111,22 +115,23 @@ regen-demo:
 
 # Build the extension: stage the wasm decoder + shim into media/, then compile TS.
 ext-build: wasm
-    rm -rf extension/media/pkg
-    cp -r web/pkg extension/media/pkg
-    cp web/wasi_shim.js extension/media/wasi_shim.js
-    pnpm --dir extension install
-    pnpm --dir extension run compile
+    rm -rf web/extension/media/pkg
+    cp -r dist/pkg web/extension/media/pkg
+    cp web/demo/wasi_shim.js web/extension/media/wasi_shim.js
+    pnpm --dir web/extension install
+    pnpm --dir web/extension run compile
 
-# Package a .vsix into the repo root. Install via the editor GUI (Extensions >
+# Package a .vsix into dist/. Install via the editor GUI (Extensions >
 # Install from VSIX) in VS Code / VSCodium / Cursor / any VS Code-family editor,
 # or use `just ext-install` below.
 ext-package: ext-build
-    cd extension && pnpm dlx @vscode/vsce package --no-dependencies --out "{{justfile_directory()}}/dif-viewer.vsix"
+    mkdir -p "{{justfile_directory()}}/dist"
+    cd web/extension && pnpm dlx @vscode/vsce package --no-dependencies --out "{{justfile_directory()}}/dist/dif-viewer.vsix"
 
 # Install the packaged extension via an editor CLI. `variant` is the editor
 # binary on PATH: `code` (default), `codium`, `cursor`, ...
 ext-install variant="code": ext-package
-    {{variant}} --install-extension "{{justfile_directory()}}/dif-viewer.vsix"
+    {{variant}} --install-extension "{{justfile_directory()}}/dist/dif-viewer.vsix"
 
 # Standalone tsc -p: no wasm build needed at compile time.
 #
@@ -135,8 +140,8 @@ ext-test:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v node >/dev/null && command -v pnpm >/dev/null || { echo "skip ext-test: no node/pnpm"; exit 0; }
-    pnpm --dir extension install --frozen-lockfile || pnpm --dir extension install
-    pnpm --dir extension run compile
+    pnpm --dir web/extension install --frozen-lockfile || pnpm --dir web/extension install
+    pnpm --dir web/extension run compile
 
 # --- drawio rendering (local container) ------------------------------------
 # rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
@@ -190,7 +195,7 @@ py-fmt:
 
 # Compile the spec; repo convention requires it to build.
 spec:
-    typst compile spec/dif-spec.typ
+    typst compile docs/spec/dif-spec.typ
 
 # --- Aggregate ------------------------------------------------------------
 
@@ -202,12 +207,13 @@ ci: test-all spec
 # --- Cleanup --------------------------------------------------------------
 
 # `dif` is uninstalled from the uv project env (`.venv`) only — `uv pip` never
-# touches system pip. Leaves tracked sources (extension/media/viewer.js) and
+# touches system pip. Leaves tracked sources (web/extension/media/viewer.js) and
 # deps (node_modules).
-# Remove build artifacts: cargo target, staged wasm + TS output, vsix, py caches, dif module.
+# Remove build artifacts: cargo target, staged wasm + TS output, dist, py caches,
+# bench scratch, dif module.
 clean:
     cargo clean
     -uv pip uninstall dif
-    rm -rf web/pkg extension/media/pkg extension/out .pytest_cache
-    rm -rf dif_tools/__pycache__ bench/__pycache__ tests/__pycache__
-    rm -f extension/media/wasi_shim.js dif-viewer.vsix
+    rm -rf web/extension/media/pkg web/extension/out .pytest_cache dist
+    rm -rf py/dif_tools/__pycache__ py/bench/__pycache__ py/tests/__pycache__
+    rm -f web/extension/media/wasi_shim.js bench-report.md bench-codecs.tsv

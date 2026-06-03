@@ -1,15 +1,15 @@
 // Wasm decoder smoke test under node. Loads the wasm-bindgen glue (its bare
 // `wasi_snapshot_preview1` import is satisfied by the resolve hook in
-// wasi-resolve.mjs), decodes web/flowchart.dif, and checks the decode + render.
+// wasi-resolve.mjs), decodes web/demo/flowchart.dif, and checks decode + render.
 // Exits non-zero on any mismatch so `just wasm-test` fails loudly.
 import { readFile } from "node:fs/promises";
-import init, { Image } from "../../web/pkg/dif_wasm.js";
+import init, { Image } from "../../dist/pkg/dif_wasm.js";
 
-const wasm = await readFile(new URL("../../web/pkg/dif_wasm_bg.wasm", import.meta.url));
+const wasm = await readFile(new URL("../../dist/pkg/dif_wasm_bg.wasm", import.meta.url));
 // node's fetch can't load file:// URLs, so hand init the bytes directly.
 await init({ module_or_path: wasm });
 
-const dif = await readFile(new URL("../../web/flowchart.dif", import.meta.url));
+const dif = await readFile(new URL("../demo/flowchart.dif", import.meta.url));
 const img = Image.fromBytes(new Uint8Array(dif));
 
 const themes = img.themeNames().split("\n").filter(Boolean);

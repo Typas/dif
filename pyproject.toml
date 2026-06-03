@@ -41,8 +41,8 @@ target-version = ["py312"]
 target-version = "py312"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
+pythonpath = ["py"]
+testpaths = ["py/tests"]
 markers = ["slow: integration tests needing external tools (e.g. podman)"]
 
 # Coverage of the Python source (the `dif` core is Rust, measured by `just cov`).
@@ -51,11 +51,11 @@ source = ["dif_tools", "bench"]
 branch = true
 # Standalone matplotlib analysis script (hyphenated, not importable, run by hand
 # on two TSVs) — not part of the library surface, so out of the coverage scope.
-omit = ["bench/bench-format-compare.py"]
+omit = ["py/bench/bench-format-compare.py"]
 
 [tool.coverage.report]
 show_missing = true
 
 [tool.ty.environment]
 # Hand-written stub for the compiled `dif` extension module.
-extra-paths = ["typings"]
+extra-paths = ["py/typings"]

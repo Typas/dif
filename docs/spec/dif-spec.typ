@@ -194,9 +194,9 @@ prediction-free design makes DIF trail PNG/WebP/JXL outright.
 / `crates/dif-py`: PyO3/maturin bindings exposing the `dif` module.
 / `crates/dif-wasm`: `wasm-bindgen` decoder reusing `dif-core`.
 / `crates/kanzi-shim`: Rust cdylib wrapping kanzi-cpp for the benchmark.
-/ `dif_tools/`: image→DIF and drawio→PNG→DIF converters and theme strategies.
-/ `bench/`: the $M$-metric codec harness and cross-format comparison.
-/ `web/`, `extension/`: browser demo and a theme-aware VSCodium custom editor.
+/ `py/dif_tools/`: image→DIF and drawio→PNG→DIF converters and theme strategies.
+/ `py/bench/`: the $M$-metric codec harness and cross-format comparison.
+/ `web/demo/`, `web/extension/`: browser demo and a theme-aware VSCodium custom editor.
 
 Standard diagram samples should be taken from the draw.io documentation
 @drawio; drawio rendering uses draw.io desktop (pinned to v30.0.4).

@@ -1,5 +1,8 @@
 // Demo: decode a .dif in the browser and recolor it to match the OS theme.
-import init, { Image } from "./pkg/dif_wasm.js";
+// The decoder is built to dist/pkg (`just wasm`); serve the repo root so this
+// relative path resolves. The wasi import is satisfied by the import map in
+// index.html (resolved relative to the document, so wasi_shim.js stays here).
+import init, { Image } from "../../dist/pkg/dif_wasm.js";
 
 const DIF_URL = "./flowchart.dif";
 

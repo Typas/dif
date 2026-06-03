@@ -43,14 +43,14 @@ def load_image(path: str | Path) -> tuple[np.ndarray, bool, int]:
 
 
 # Rendered-PNG cache for ``.drawio`` inputs (gitignored; never /tmp).
-_DRAWIO_PNG_CACHE = Path(__file__).resolve().parent.parent / "out" / "drawio-png"
+_DRAWIO_PNG_CACHE = Path(__file__).resolve().parent.parent.parent / "out" / "drawio-png"
 
 
 def resolve_raster(path: str | Path) -> Path:
     """Map any input to a raster path PIL can open.
 
     A ``.drawio`` input is rendered to a PNG under ``out/drawio-png/`` (keeping
-    ``testdata/`` clean); every other path passes through unchanged. Shared by
+    ``data/testdata/`` clean); every other path passes through unchanged. Shared by
     the DIF converter and the format comparison so both see the same pixels.
     """
     path = Path(path)
@@ -71,7 +71,7 @@ def image_to_dif_image(path: str | Path, strategy: str = "arithmetic") -> "dif.I
     """Build a :class:`dif.Image` from an image (or ``.drawio``) file.
 
     A ``.drawio`` input is first rendered to a PNG under ``out/drawio-png/``
-    (keeping ``testdata/`` clean) and then loaded like any raster image.
+    (keeping ``data/testdata/`` clean) and then loaded like any raster image.
     """
     path = resolve_raster(path)
     arr, is_gray, depth_bits = load_image(path)
