@@ -31,9 +31,9 @@ pub mod derive;
 pub mod error;
 pub mod format;
 
-pub use codec::{from_dif, from_difr, to_dif, to_dif_workers, to_difr, CodecId};
+pub use codec::{from_dif, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId};
 #[cfg(feature = "derive")]
-pub use derive::{derive_dark_palette, Strategy};
+pub use derive::{derive_dark_base_color, derive_dark_palette, Strategy};
 pub use error::{DifError, Result};
 
 /// Theme capability bits (the low 3 bits of a theme's `abilities` byte). The top
