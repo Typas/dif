@@ -45,6 +45,13 @@ CodecName = Literal[
     "lz4-fast1",
     "lzav",
     "lzav-1",
+    "zxc",
+    "zxc-1",
+    "zxc-2",
+    "zxc-3",
+    "zxc-4",
+    "zxc-5",
+    "zxc-6",
 ]
 
 class Image:

@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
         "zstd-22",
         "lz4-fast1",
         "lzav-1",
+        "zxc-1",
+        "zxc-2",
+        "zxc-3",
+        "zxc-4",
+        "zxc-5",
+        "zxc-6",
     )
     conv.add_argument(
         "--codec",
