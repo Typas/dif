@@ -178,7 +178,7 @@ def dif_codecs(numthreads: int = 1) -> list[Codec]:
         # raw is `.difr` bytes -> rebuild the image -> encode the `.dif` container.
         # `codec` is a runtime str; narrow to the typed alias (mirrors compare.py).
         name = cast("dif.CodecName", codec)
-        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(name, workers))
+        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(name, workers=workers))
 
     def _dec(comp: bytes, _n: int) -> bytes:
         return bytes(dif.Image.from_dif(comp).to_difr())

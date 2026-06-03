@@ -1,4 +1,4 @@
-"""Converter tests: lossless source theme, theme synthesis, strategies."""
+"""Converter tests: lossless source theme, theme synthesis, strategies (v3)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,12 @@ import pytest
 from PIL import Image as PILImage
 
 from dif_tools import image_to_dif_image
-from dif_tools.themes import derive_lut, derive_palette, identity_lut
+from dif_tools.themes import derive_base_color, derive_palette
+
+_LIGHT = (255, 255, 255)
+
+# Outer codec family nibble (high 4 bits of the codec byte at offset 8).
+_FAMILY = {"zstd": 4, "brotli": 2, "libdeflate": 1, "lz4": 5, "lzav": 6}
 
 
 def _save_color(tmp_path, name="diag.png"):
@@ -33,68 +38,68 @@ def _save_gray(tmp_path, name="g.png"):
 def test_color_source_theme_lossless(tmp_path, strategy):
     path, arr = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy=strategy)
-    back = dif.Image.from_dif(img.to_dif("brotli"))
-    _, _, rgba = back.render("light", 0)
+    back = dif.Image.from_dif(img.to_dif("brotli-5"))
+    _, _, rgba = back.render("light", _LIGHT, 0)
     got = np.frombuffer(rgba, np.uint8).reshape(8, 8, 4)
     assert np.array_equal(got, arr)
 
 
 @pytest.mark.parametrize("strategy", ["keep", "invert", "arithmetic"])
 def test_gray_source_theme_lossless(tmp_path, strategy):
+    # A grayscale source loads as RGBA8 (v3 is indexed-only) and round-trips.
     path, arr = _save_gray(tmp_path)
     img = image_to_dif_image(path, strategy=strategy)
-    assert img.is_grayscale
-    back = dif.Image.from_dif(img.to_dif("brotli"))
-    _, _, rgba = back.render("light", 0)
-    got = np.frombuffer(rgba, np.uint8).reshape(8, 8, 4)[..., 0]
-    assert np.array_equal(got, arr)
+    back = dif.Image.from_dif(img.to_dif("brotli-5"))
+    _, _, rgba = back.render("light", _LIGHT, 0)
+    got = np.frombuffer(rgba, np.uint8).reshape(8, 8, 4)
+    expect = np.dstack([arr, arr, arr, np.full_like(arr, 255)])
+    assert np.array_equal(got, expect)
 
 
 @pytest.mark.parametrize(
-    "codec,want_id,want_level",
+    "codec,family",
     [
-        ("zstd-3", 4, 3),
-        ("zstd-10", 4, 10),
-        ("brotli-5", 2, 5),
-        ("brotli-11", 2, 11),
-        ("libdeflate-6", 1, 6),
-        ("lz4-fast1", 5, 1),
-        ("lzav-1", 6, 1),
+        ("zstd-3", 4),
+        ("zstd-10", 4),
+        ("brotli-5", 2),
+        ("brotli-11", 2),
+        ("libdeflate-6", 1),
+        ("lz4-fast1", 5),
+        ("lzav-1", 6),
     ],
 )
-def test_dif_codec_variants_roundtrip(tmp_path, codec, want_id, want_level):
+def test_dif_codec_variants_roundtrip(tmp_path, codec, family):
     path, arr = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy="keep")
     blob = img.to_dif(codec)
-    # Header records (codec byte, level byte) at offsets 5 and 6.
-    assert blob[:4] == b"DIF1"
-    assert blob[5] == want_id
-    assert blob[6] == want_level
+    # The outer codec byte (offset 8) packs family<<4 | level index.
+    assert blob[:4] == b"DIF3"
+    assert blob[8] >> 4 == family
     back = dif.Image.from_dif(blob)
-    _, _, rgba = back.render("light", 0)
+    _, _, rgba = back.render("light", _LIGHT, 0)
     got = np.frombuffer(rgba, np.uint8).reshape(8, 8, 4)
     assert np.array_equal(got, arr)
 
 
-def test_dif_default_codec_is_zstd3(tmp_path):
+def test_dif_default_codec_is_zstd(tmp_path):
     path, _ = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy="keep")
     blob = img.to_dif()  # no-arg default
-    assert blob[5] == 4 and blob[6] == 3  # zstd, level 3
+    assert blob[8] >> 4 == _FAMILY["zstd"]
 
 
 def test_keep_strategy_single_theme(tmp_path):
     path, _ = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy="keep")
-    assert img.themes == [(0, "light")]
+    assert img.themes == [(1, _LIGHT)]  # abilities=light, white base
 
 
 def test_derived_dark_differs(tmp_path):
-    path, arr = _save_color(tmp_path)
+    path, _ = _save_color(tmp_path)
     img = image_to_dif_image(path, strategy="arithmetic")
-    back = dif.Image.from_dif(img.to_dif("brotli"))
-    _, _, light = back.render("light", 0)
-    _, _, dark = back.render("dark", 0)
+    back = dif.Image.from_dif(img.to_dif("brotli-5"))
+    _, _, light = back.render("light", _LIGHT, 0)
+    _, _, dark = back.render("dark", (0, 0, 0), 0)
     assert bytes(light) != bytes(dark)
 
 
@@ -127,10 +132,6 @@ def test_arithmetic_chromatic_stays_visible():
     assert out[3] == 200  # alpha preserved
 
 
-def test_invert_lut():
-    lut = derive_lut("invert", 255)
-    assert lut[0] == 255 and lut[255] == 0 and len(lut) == 256
-
-
-def test_identity_lut():
-    assert identity_lut(255) == list(range(256))
+def test_derive_base_color():
+    assert derive_base_color((255, 255, 255), "invert") == (0, 0, 0)
+    assert derive_base_color((0, 0, 0), "invert") == (255, 255, 255)

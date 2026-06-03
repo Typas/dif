@@ -24,21 +24,34 @@ def main(argv: list[str] | None = None) -> int:
         default="arithmetic",
         help="how to synthesize the dark theme (default: arithmetic)",
     )
+    _CODECS = (
+        "store",
+        "libdeflate-6",
+        "brotli-5",
+        "brotli-11",
+        "zstd-3",
+        "zstd-10",
+        "zstd-22",
+        "lz4-fast1",
+        "lzav-1",
+    )
     conv.add_argument(
         "--codec",
-        choices=(
-            "store",
-            "libdeflate-6",
-            "brotli-5",
-            "brotli-11",
-            "zstd-3",
-            "zstd-10",
-            "zstd-22",
-            "lz4-fast1",
-            "lzav-1",
-        ),
+        choices=_CODECS,
         default="zstd-3",
-        help="compression codec variant for .dif (default: zstd-3)",
+        help="outer whole-body codec for .dif (default: zstd-3)",
+    )
+    conv.add_argument(
+        "--palette-codec",
+        choices=_CODECS,
+        default="store",
+        help="per-palette section codec (default: store)",
+    )
+    conv.add_argument(
+        "--frame-codec",
+        choices=_CODECS,
+        default="store",
+        help="per-frame section codec (default: store)",
     )
     conv.add_argument(
         "--raw", action="store_true", help="write uncompressed .difr instead"
@@ -51,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             strategy=args.theme_strategy,
             codec=args.codec,
+            palette_codec=args.palette_codec,
+            frame_codec=args.frame_codec,
             raw=args.raw,
         )
         print(f"wrote {args.output} ({len(data)} bytes)")

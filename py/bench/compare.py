@@ -55,10 +55,9 @@ class FormatResult:
     note: str = ""
 
 
-def _as_rgb(arr: np.ndarray, is_gray: bool) -> np.ndarray:
-    """A contiguous 3-channel array for codecs that reject single-channel input."""
-    rgb = np.repeat(arr[..., None], 3, axis=2) if is_gray else arr[..., :3]
-    return np.ascontiguousarray(rgb)
+def _as_rgb(arr: np.ndarray) -> np.ndarray:
+    """A contiguous 3-channel (RGB) view of an RGBA array."""
+    return np.ascontiguousarray(arr[..., :3])
 
 
 def _equal(decoded: np.ndarray, expected: np.ndarray) -> bool:
@@ -95,10 +94,9 @@ def compare_image(
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
     raster = resolve_raster(path)
-    # `load_image` returns the natural dtype: uint8 for 8-bit (gray or RGBA),
-    # uint16 for 16-bit grayscale — exactly what the encoders below expect.
-    arr, is_gray, depth = load_image(raster)
-    rgb = _as_rgb(arr, is_gray)
+    # `load_image` returns an RGBA8 array; v3 DIF is indexed-only.
+    arr = load_image(raster)
+    rgb = _as_rgb(arr)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
     ref_size: int | None = None  # running reference for the live `rel` column
@@ -125,12 +123,12 @@ def compare_image(
     # which encodes the raw array). `arr` is already in memory, so no file I/O
     # is timed. `decode` renders one theme back to pixels (file -> bitmap).
     def dif_enc(strategy: str, codec: str, workers: int = 0):
-        return lambda: dif_image_from_array(arr, is_gray, depth, strategy).to_dif(
-            cast("dif.CodecName", codec), workers
+        return lambda: dif_image_from_array(arr, strategy).to_dif(
+            cast("dif.CodecName", codec), workers=workers
         )
 
     def dif_dec(b: bytes):
-        return dif.Image.from_dif(b).render("light", 0)[2]
+        return dif.Image.from_dif(b).render("light", (255, 255, 255), 0)[2]
 
     # The `rel` reference row (REL_REF picks it by name) is emitted first so every
     # row below has a live ratio and the table is topped by the baseline. png's
@@ -195,7 +193,7 @@ def compare_image(
     )
 
     # GIF via Pillow (palette; lossless only for <=256 colors).
-    pil = PILImage.fromarray(arr if is_gray else rgb)
+    pil = PILImage.fromarray(rgb)
 
     def gif_enc() -> bytes:
         buf = io.BytesIO()
@@ -204,9 +202,9 @@ def compare_image(
 
     def gif_dec(b: bytes) -> np.ndarray:
         out = PILImage.open(io.BytesIO(b))
-        return np.asarray(out.convert("L") if is_gray else out.convert("RGB"))
+        return np.asarray(out.convert("RGB"))
 
-    emit("gif", gif_enc, gif_dec, arr if is_gray else rgb)
+    emit("gif", gif_enc, gif_dec, rgb)
     return rows
 
 

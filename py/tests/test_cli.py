@@ -23,7 +23,7 @@ def test_dif_convert_cli_writes_dif(tmp_path, capsys):
     out = tmp_path / "out.dif"
     rc = dif_main(["convert", str(src), str(out), "--codec", "zstd-3"])
     assert rc == 0
-    assert out.read_bytes()[:4] == b"DIF1"
+    assert out.read_bytes()[:4] == b"DIF3"
     assert "wrote" in capsys.readouterr().out
 
 
@@ -31,7 +31,7 @@ def test_dif_convert_cli_raw(tmp_path):
     src = _toy_png(tmp_path / "in.png")
     out = tmp_path / "out.difr"
     assert dif_main(["convert", str(src), str(out), "--raw"]) == 0
-    assert out.read_bytes()[:4] == b"DIFR"
+    assert out.read_bytes()[:5] == b"DIFR3"
 
 
 def test_bench_images_expands_dir(tmp_path):
