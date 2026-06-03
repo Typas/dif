@@ -91,7 +91,7 @@ def test_tables_and_tsv_rows(tmp_path):
 
     tsv = list(iter_rows(p, rows))
     assert len(tsv) == len(rows)
-    assert all(len(t) == 9 for t in tsv)  # matches compare.TSV_HEADER width
+    assert all(len(t) == 8 for t in tsv)  # matches compare.TSV_HEADER width
 
 
 def test_subdir_stats_aggregates(tmp_path):

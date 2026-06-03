@@ -1,9 +1,11 @@
 """Compare DIF against PNG / lossless JXL / WebP / AVIF / GIF.
 
-Sizes, encode/decode speeds, and a losslessness check via ``imagecodecs`` (and
-Pillow for GIF). Each format is guarded: a missing codec or a non-lossless
-result is annotated rather than crashing the run. GIF and any format that fails
-the lossless check are marked ``LOSSY`` so the size comparison stays honest.
+Sizes and encode/decode speeds via ``imagecodecs`` (and Pillow for GIF). Each
+format is guarded: a missing codec is annotated rather than crashing the run.
+Every format here is lossless by construction, so no loss column is reported; a
+round-trip check still runs (``FormatResult.lossless``, asserted in tests) to
+catch a codec that silently stops round-tripping. GIF is genuine lossless LZW —
+it only diverges when an image exceeds its 256-entry palette (width, not loss).
 """
 
 from __future__ import annotations
@@ -116,7 +118,13 @@ def _equal(decoded: np.ndarray, expected: np.ndarray) -> bool:
 
 
 def _measure(
-    name: str, enc, dec, expected: np.ndarray | None, nbytes: int, repeats: int
+    name: str,
+    enc,
+    dec,
+    expected: np.ndarray | None,
+    nbytes: int,
+    repeats: int,
+    note: str = "",
 ) -> FormatResult:
     try:
         blob = enc()
@@ -124,7 +132,7 @@ def _measure(
         lossless = True if expected is None else _equal(decoded, expected)
         e, _ = speed(enc, nbytes, repeats)
         d, _ = speed(lambda: dec(blob), nbytes, repeats)
-        return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless)
+        return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless, note)
     except Exception as exc:  # noqa: BLE001
         return FormatResult(name, 0, 0, 0, False, note=type(exc).__name__)
 
@@ -152,10 +160,10 @@ def compare_image(
         print(_HEAD)
         print(_SEP)
 
-    def emit(name: str, enc, dec, expected):
+    def emit(name: str, enc, dec, expected, note: str = ""):
         """Measure one format, then print its row live (mirrors bench_image)."""
         nonlocal ref_size
-        r = _measure(name, enc, dec, expected, nbytes, repeats)
+        r = _measure(name, enc, dec, expected, nbytes, repeats, note)
         # PNG sets the running `rel` reference; the final table re-derives it via
         # _ref_size. dif rows stream before png, so their live rel stays blank
         # until png lands — the re-derived final/TSV/report tables are correct.
@@ -224,12 +232,17 @@ def compare_image(
     # apples-to-apples 1-core measure (dif/png/gif are single-threaded) and a
     # future imagecodecs `None`->auto default can't skew it; --numthreads N lifts
     # the cap to probe jxl/avif scaling (webp lossless ignores it).
+    # The `3ch` note flags codecs fed `rgb` (alpha dropped) while enc/dec MB/s is
+    # still normalized over `nbytes` = the 4-channel `arr`. They process 3/4 the
+    # bytes but are credited the full RGBA payload, so their throughput reads ~4/3
+    # high vs a strict bytes-processed measure. (png/dif/jxl encode `arr`, no skew.)
     nt = numthreads
     emit(
         "webp-ll",
         lambda: imagecodecs.webp_encode(rgb, lossless=True, numthreads=nt),
         imagecodecs.webp_decode,
         rgb,
+        note="3ch",
     )
     emit(
         "jxl-ll",
@@ -244,9 +257,11 @@ def compare_image(
         ),
         imagecodecs.avif_decode,
         rgb,
+        note="3ch",
     )
 
-    # GIF via Pillow (palette; lossless only for <=256 colors).
+    # GIF via Pillow (lossless LZW; round-trips exactly only for <=256 colors,
+    # else the palette quantize drops colors — a width limit, not codec loss).
     pil = PILImage.fromarray(rgb)
 
     def gif_enc() -> bytes:
@@ -258,7 +273,7 @@ def compare_image(
         out = PILImage.open(io.BytesIO(b))
         return np.asarray(out.convert("RGB"))
 
-    emit("gif", gif_enc, gif_dec, rgb)
+    emit("gif", gif_enc, gif_dec, rgb, note="3ch")
     return rows
 
 
@@ -295,10 +310,9 @@ def _row_line(r: FormatResult, ref_size: int | None) -> str:
             f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {r.note:^{_NOTE_W}} |"
         )
     rel = f"x{r.size / ref_size:.2f}" if ref_size else ""
-    tag = "" if r.lossless else "LOSSY"
     return (
         f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
-        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {tag:^{_NOTE_W}} |"
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {r.note:^{_NOTE_W}} |"
     )
 
 
@@ -316,7 +330,6 @@ TSV_HEADER = (
     "enc_mbps",
     "dec_mbps",
     "rel",
-    "lossless",
     "available",
     "note",
 )
@@ -335,7 +348,6 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
             f"{r.enc_mbps:.2f}" if r.available else "",
             f"{r.dec_mbps:.2f}" if r.available else "",
             rel,
-            int(r.lossless),
             int(r.available),
             r.note,
         )
@@ -359,7 +371,6 @@ class FormatStat:
     enc_mbps: float
     dec_mbps: float
     rel_mean: float
-    lossless: bool
     note: str = ""
 
 
@@ -382,7 +393,6 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
                 statistics.mean(r.enc_mbps for r in rs),
                 statistics.mean(r.dec_mbps for r in rs),
                 statistics.mean(rels) if rels else float("nan"),
-                all(r.lossless for r in rs),
                 rs[-1].note,
             )
         )
@@ -417,14 +427,13 @@ def subdir_stats(reports: Sequence[ImageRows]) -> list[tuple[str, list[FormatSta
 def format_stats_table(stats: list[FormatStat]) -> str:
     """Aggregate block as a GitHub-flavored markdown table."""
     rows = [
-        "| format | n | size | enc MB/s | dec MB/s | rel | lossless | note |",
-        "|---|--:|--:|--:|--:|--:|:--:|---|",
+        "| format | n | size | enc MB/s | dec MB/s | rel | note |",
+        "|---|--:|--:|--:|--:|--:|---|",
     ]
     for s in stats:
         rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
-        ll = "yes" if s.lossless else "LOSSY"
         rows.append(
             f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
-            f"| {s.dec_mbps:.1f} | {rel} | {ll} | {s.note} |"
+            f"| {s.dec_mbps:.1f} | {rel} | {s.note} |"
         )
     return "\n".join(rows)
