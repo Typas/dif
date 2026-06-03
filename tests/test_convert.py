@@ -8,7 +8,7 @@ import pytest
 from PIL import Image as PILImage
 
 from dif_tools import image_to_dif_image
-from dif_tools.themes import derive_lut, derive_palette
+from dif_tools.themes import derive_lut, derive_palette, identity_lut
 
 
 def _save_color(tmp_path, name="diag.png"):
@@ -130,3 +130,7 @@ def test_arithmetic_chromatic_stays_visible():
 def test_invert_lut():
     lut = derive_lut("invert", 255)
     assert lut[0] == 255 and lut[255] == 0 and len(lut) == 256
+
+
+def test_identity_lut():
+    assert identity_lut(255) == list(range(256))

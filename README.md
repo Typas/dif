@@ -41,7 +41,7 @@ compressed `.dif` body uses one of 8 study-chosen lossless codecs.
 just test
 
 # 2. Build the Python extension `dif` into the uv env (needed by the
-#    converter, the benchmarks, and pytest).
+#    converter, the benchmarks, and the tests).
 just py
 
 # 3. Convert an image (or a .drawio) to a themed .dif.
@@ -51,7 +51,7 @@ uv run python -m dif_tools convert testdata/usc-sipi-misc/4.1.01.tiff out.dif
 #   --raw                                     (write uncompressed .difr instead)
 
 # 4. Run the Python test suite.
-just pytest
+just py-test
 
 # 5. (Optional) View in the browser, theme-aware.
 just wasm-setup   # one-time toolchain
@@ -83,7 +83,8 @@ A bare `just` (or `just --list`) prints every recipe.
 | `check-nostd`       | Assert the portable core still builds no_std (alias of `build`).                     |
 | `test`              | Test the core (store/deflate/lz4 under `cfg(test)`).                                 |
 | `test-native`       | Test with all native codecs.                                                         |
-| `test-all`          | Full matrix: every feature tier builds, both test sets pass.                         |
+| `cov`               | dif-core line coverage (cargo-llvm-cov, native features).                            |
+| `test-all`          | Every feature tested: core matrix + `py-test` + `wasm-test` + `ext-test`.            |
 | `fmt` / `fmt-check` | `cargo fmt` (write / check).                                                         |
 | `clippy`            | Clippy with `--all-features -D warnings`.                                            |
 
@@ -93,6 +94,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | `py`         | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
 | `wasm-setup` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
 | `wasm`       | Build the browser decoder into `web/pkg` (all 8 codecs cross-compiled via `zig cc`).                               |
+| `wasm-test`  | Smoke-test the decoder in node: decode `web/flowchart.dif` (run `wasm` first; skips without node).                 |
 | `regen-demo` | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
 
 ### VS Code / Codium / Cursor extension
@@ -101,6 +103,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | `ext-build`             | Stage the wasip1 decoder (all 8 codecs) + wasi shim into `extension/media/`, then compile the TypeScript.           |
 | `ext-package`           | Build `dif-viewer.vsix` into the repo root.                                                                         |
 | `ext-install [variant]` | Package, then install via the editor CLI — `variant` is the binary on PATH: `code` (default), `codium`, `cursor`, … |
+| `ext-test`              | Typecheck the extension TypeScript (`tsc -p`; skips without node/pnpm).                                             |
 
 The `.vsix` also installs through the GUI (Extensions ▸ **Install from VSIX…**) in
 any VS Code-family editor.
@@ -114,15 +117,16 @@ any VS Code-family editor.
 ### Python tools / tests
 | Recipe    | Does                                                       |
 |-----------|------------------------------------------------------------|
-| `pytest`  | Run the pytest suite (run `py` first).                     |
-| `lint-py` | `black --check`, `ruff check`, `ty check` (must be clean). |
-| `fmt-py`  | `black` + `ruff check --fix`.                              |
+| `py-test` | Run the pytest suite (run `py` first).                     |
+| `py-cov`  | pytest suite with coverage.py (dif_tools + bench).         |
+| `py-lint` | `black --check`, `ruff check`, `ty check` (must be clean). |
+| `py-fmt`  | `black` + `ruff check --fix`.                              |
 
 ### Spec & aggregate
-| Recipe | Does                                                   |
-|--------|--------------------------------------------------------|
-| `spec` | Compile the Typst spec.                                |
-| `ci`   | `test-all` + `spec` — what the repo enforces for Rust. |
+| Recipe | Does                                          |
+|--------|-----------------------------------------------|
+| `spec` | Compile the Typst spec.                       |
+| `ci`   | `test-all` + `spec` — what the repo enforces. |
 
 ## Benchmarks (`just bench-*`)
 

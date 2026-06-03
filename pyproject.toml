@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Converters, tests, and benchmarks for the DIF (Diagram Image Format)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "numpy>=2",
-    "pillow>=11",
-    "imagecodecs>=2024.6.1",
-    "zstandard>=0.23",
-    "brotli>=1.1",
-    "lz4>=4.3",
+    "numpy>=2.4.6",
+    "pillow>=12.2.0",
+    "imagecodecs>=2026.5.10",
+    "zstandard>=0.25.0",
+    "brotli>=1.2.0",
+    "lz4>=4.4.5",
     "deflate>=0.8.1",
     "bzip3>=0.1.9",
     "pyzstd>=0.19.1",
@@ -17,15 +17,16 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "maturin>=1.7",
-    "pytest>=8",
-    "black>=24",
-    "ruff>=0.6",
-    "ty>=0.0.1a1",
+    "maturin>=1.13.3",
+    "pytest>=9.0.3",
+    "black>=26.5.1",
+    "ruff>=0.15.15",
+    "ty>=0.0.40",
     # Cross-compile the wasm decoder's C codec deps (lzav, zstd) via zig cc.
     # Pulls `ziglang` (the zig binary wheel) automatically, so no system zig.
-    "cargo-zigbuild>=0.21",
-    "matplotlib>=3.9",
+    "cargo-zigbuild>=0.22.3",
+    "matplotlib>=3.10.9",
+    "pytest-cov>=7.1.0",
 ]
 
 # Virtual project: deps only, nothing to build here. The `dif` extension is
@@ -42,6 +43,18 @@ target-version = "py312"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["slow: integration tests needing external tools (e.g. podman)"]
+
+# Coverage of the Python source (the `dif` core is Rust, measured by `just cov`).
+[tool.coverage.run]
+source = ["dif_tools", "bench"]
+branch = true
+# Standalone matplotlib analysis script (hyphenated, not importable, run by hand
+# on two TSVs) — not part of the library surface, so out of the coverage scope.
+omit = ["bench/bench-format-compare.py"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ty.environment]
 # Hand-written stub for the compiled `dif` extension module.

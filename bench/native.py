@@ -42,8 +42,11 @@ int shim_decompress(const void* s, void* d, int sl, int dl){ return lzav_decompr
 """
 
 
-def build_lzav() -> bool:
-    """Fetch lzav.h and compile the shim. Returns True on success."""
+def build_lzav() -> bool:  # pragma: no cover
+    """Fetch lzav.h and compile the shim. Returns True on success.
+
+    No-cover: needs network + a C compiler; exercised by ``just bench-setup``.
+    """
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if cc is None:
         return False
@@ -104,8 +107,11 @@ def _lzav_codec() -> "Codec | None":
     return _C("lzav-1", compress, decompress)
 
 
-def build_kanzi() -> bool:
-    """Vendor kanzi-cpp and cargo-build the shim cdylib. Returns True on success."""
+def build_kanzi() -> bool:  # pragma: no cover
+    """Vendor kanzi-cpp and cargo-build the shim cdylib. Returns True on success.
+
+    No-cover: needs git + cargo + network; exercised by ``just bench-setup``.
+    """
     cargo = shutil.which("cargo")
     if cargo is None:
         return False

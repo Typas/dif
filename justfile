@@ -1,6 +1,12 @@
-# DIF project automation. Run from the `final/` project root.
+# DIF project automation. Run from the `dif/` project root.
 # Python tasks go through `uv` (project pinned to 3.12, which also sidesteps the
 # system-Python PyO3 version cap). maturin/wasm-pack/typst are external tools.
+#
+# Recipe naming rule: `<component>-<action>[-<variant>]`. Component first.
+# dif-core is the default component, so its actions are bare verbs (build,
+# test, fmt, clippy). Every other component keeps its prefix (wasm-, ext-,
+# drawio-, bench-, py-, spec). Cross-component aggregates are bare verbs
+# (default, test-all, ci, clean, regen-demo).
 
 default:
     @just --list
@@ -30,8 +36,16 @@ test:
 test-native:
     cargo test -p dif-core --features native
 
-# Full core matrix: every feature tier builds, both test sets pass.
-test-all: build build-std build-native test test-native
+# dif-core line coverage (cargo-llvm-cov, native feature set so every codec is
+# exercised). First run auto-adds the llvm-tools-preview component.
+cov:
+    cargo llvm-cov -p dif-core --features native
+
+# Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
+# extension suites.
+#
+# Every feature tested: core matrix + py-test + wasm-test + ext-test.
+test-all: build build-std build-native test test-native py-test wasm-test ext-test
 
 fmt:
     cargo fmt --all
@@ -71,6 +85,19 @@ wasm:
     wasm-bindgen target/wasm32-wasip1/release/dif_wasm.wasm \
         --target web --out-dir "$PWD/web/pkg"
 
+# Load web/pkg + the wasi shim and decode web/flowchart.dif. Node has no import
+# maps, so a resolve hook wires the glue's bare `wasi_snapshot_preview1` import
+# to web/wasi_shim.js. Run `just wasm` first to build web/pkg.
+#
+# Smoke-test the wasm decoder in node (skips without node or web/pkg).
+wasm-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v node >/dev/null || { echo "skip wasm-test: no node"; exit 0; }
+    [ -f web/pkg/dif_wasm.js ] || { echo "skip wasm-test: web/pkg missing (run just wasm)"; exit 0; }
+    node --import "{{justfile_directory()}}/tests/wasm/wasi-resolve.mjs" \
+        "{{justfile_directory()}}/tests/wasm/smoke.mjs"
+
 # Re-emit the committed demo asset for the current .dif format (run `just py`
 # first so the `dif` module exists). Needed after a container format bump.
 regen-demo:
@@ -101,6 +128,16 @@ ext-package: ext-build
 ext-install variant="code": ext-package
     {{variant}} --install-extension "{{justfile_directory()}}/dif-viewer.vsix"
 
+# Standalone tsc -p: no wasm build needed at compile time.
+#
+# Typecheck the extension TypeScript (skips without node/pnpm).
+ext-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v node >/dev/null && command -v pnpm >/dev/null || { echo "skip ext-test: no node/pnpm"; exit 0; }
+    pnpm --dir extension install --frozen-lockfile || pnpm --dir extension install
+    pnpm --dir extension run compile
+
 # --- drawio rendering (local container) ------------------------------------
 # rlespinasse/drawio-export bundles drawio-desktop + a headless browser (xvfb),
 # run one-shot per file. Fully local, no diagrams.net. dif_tools.drawio drives
@@ -130,17 +167,22 @@ bench-codecs *ARGS:
 bench-formats *ARGS:
     uv run python -m bench formats {{ARGS}}
 
-# pytest suite (run `just py` first so the `dif` module exists).
-pytest:
+# Python test suite (run `just py` first so the `dif` module exists).
+py-test:
     uv run pytest
 
+# Python line+branch coverage over dif_tools + bench (coverage.py via pytest-cov;
+# source configured in pyproject). Run `just py` first.
+py-cov:
+    uv run pytest --cov --cov-report=term-missing
+
 # Repo requires these clean.
-lint-py:
+py-lint:
     uv run black --check .
     uv run ruff check .
     uv run ty check
 
-fmt-py:
+py-fmt:
     uv run black .
     uv run ruff check --fix .
 
