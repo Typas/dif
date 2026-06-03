@@ -117,7 +117,7 @@ A codec byte packs a 4-bit *family* and a 4-bit *level index*:
   [0], [common-pick], [benchmark-derived presets; `0` = Store],
   [1], [DEFLATE], [`1…12`],
   [2], [Brotli], [`0…11`],
-  [3], [Bzip3], [block size `64 KiB…511 MiB`],
+  [3], [zxc], [`1…6` (1 fastest … 6 densest)],
   [4],
   [Zstandard],
   [`−7, −5, −3, −1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22`],
@@ -234,10 +234,11 @@ layer runs it is no larger than the v2 varint stream in practice.
 `dif-core` is `no_std` + `alloc` by default, exposing the portable, pure-Rust set
 — Store, DEFLATE, LZ4 — which decodes in the WebAssembly build with no native
 dependencies. The `std` feature adds Brotli (pure Rust, wasm-decodable). The
-`native` feature adds Zstandard, a `libdeflate` encoder, and LZAV (C); these reach
-the browser decoder when cross-compiled with `zig` (the `wasm-native` build).
-Bzip3 (family 3) is reserved at the format level and not yet wired. A heap
-allocator is always required.
+`native` feature adds Zstandard, a `libdeflate` encoder, LZAV, and zxc (C); zstd
+and LZAV reach the browser decoder when cross-compiled with `zig` (the
+`wasm-native` build), but zxc is native-only (its bindings don't cross-build to
+wasm), so a zxc `.dif` decodes only on the host. A heap allocator is always
+required.
 
 The palette and each frame may use a different codec (`codec_palette`,
 `codec_frame`), and the whole intermediate body is wrapped by the outer `codec`;

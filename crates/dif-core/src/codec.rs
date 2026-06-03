@@ -31,8 +31,8 @@ pub enum CodecId {
     Deflate = 1,
     /// Brotli (`brotli` crate). Requires the `std` feature.
     Brotli = 2,
-    /// Bzip3. Not yet wired in this build (needs a C shim); reserved at id 3.
-    Bzip3 = 3,
+    /// zxc (BSD-3) via the `zxc-compress` crate. Requires the `zxc` feature.
+    Zxc = 3,
     /// Zstandard via `zstd-safe`. Requires a C-codec feature.
     Zstd = 4,
     /// LZ4 block via `lz4_flex` (pure-Rust, portable + wasm-decodable).
@@ -47,7 +47,7 @@ enum Method {
     Store,
     Deflate,
     Brotli,
-    Bzip3,
+    Zxc,
     Zstd,
     Lz4,
     Lzav,
@@ -57,10 +57,8 @@ enum Method {
 // (nominal) level recorded for provenance and used by encoders that honor it.
 const DEFLATE_LEVELS: [i32; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const BROTLI_LEVELS: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-// Bzip3 block-size presets in KiB (unused until the codec is wired).
-const BZIP3_LEVELS_KIB: [i32; 14] = [
-    65, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 523264,
-];
+// zxc levels 1..=6 (1 fastest, 6 densest).
+const ZXC_LEVELS: [i32; 6] = [1, 2, 3, 4, 5, 6];
 const ZSTD_LEVELS: [i32; 16] = [-7, -5, -3, -1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22];
 // LZ4: positive = `lz4_flex` fast acceleration, negative = HC level (provenance
 // only; `lz4_flex` exposes the fast block path, so the encoder ignores the value).
@@ -98,7 +96,7 @@ impl Codec {
             },
             1 => Ok((Method::Deflate, pick(&DEFLATE_LEVELS)?)),
             2 => Ok((Method::Brotli, pick(&BROTLI_LEVELS)?)),
-            3 => Ok((Method::Bzip3, pick(&BZIP3_LEVELS_KIB)?)),
+            3 => Ok((Method::Zxc, pick(&ZXC_LEVELS)?)),
             4 => Ok((Method::Zstd, pick(&ZSTD_LEVELS)?)),
             5 => Ok((Method::Lz4, pick(&LZ4_LEVELS)?)),
             6 => Ok((Method::Lzav, pick(&LZAV_LEVELS)?)),
@@ -125,11 +123,18 @@ impl Codec {
             "zstd-22" => (CodecId::Zstd, 22),
             "lz4" | "lz4-fast1" => (CodecId::Lz4, 1),
             "lzav" | "lzav-1" => (CodecId::Lzav, 1),
+            "zxc" | "zxc-3" => (CodecId::Zxc, 3),
+            "zxc-1" => (CodecId::Zxc, 1),
+            "zxc-2" => (CodecId::Zxc, 2),
+            "zxc-4" => (CodecId::Zxc, 4),
+            "zxc-5" => (CodecId::Zxc, 5),
+            "zxc-6" => (CodecId::Zxc, 6),
             _ => return Err(bad()),
         };
         let table: &[i32] = match fam {
             CodecId::Deflate => &DEFLATE_LEVELS,
             CodecId::Brotli => &BROTLI_LEVELS,
+            CodecId::Zxc => &ZXC_LEVELS,
             CodecId::Zstd => &ZSTD_LEVELS,
             CodecId::Lz4 => &LZ4_LEVELS,
             CodecId::Lzav => &LZAV_LEVELS,
@@ -160,7 +165,7 @@ fn compress(method: Method, level: i32, data: &[u8], workers: u32) -> Result<Vec
         Method::Zstd => zstd_compress(data, level, workers),
         Method::Lz4 => Ok(lz4_flex::block::compress(data)),
         Method::Lzav => lzav_compress(data),
-        Method::Bzip3 => Err(DifError::Invalid("bzip3 codec not yet wired")),
+        Method::Zxc => zxc_compress(data, level),
     }
 }
 
@@ -181,7 +186,7 @@ fn decompress(method: Method, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
             lz4_flex::block::decompress(data, raw_len).map_err(|_| DifError::CompressionFailed)
         }
         Method::Lzav => lzav_decompress(data, raw_len),
-        Method::Bzip3 => Err(DifError::Invalid("bzip3 codec not yet wired")),
+        Method::Zxc => zxc_decompress(data, raw_len),
     }
 }
 
@@ -229,6 +234,41 @@ fn lzav_compress(_data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(not(feature = "c-codecs"))]
 fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("lzav codec requires a C-codec feature"))
+}
+
+// --- zxc: BSD-3 C lib via the `zxc-compress` crate (feature `zxc`). The stream
+//     is self-describing, so decode ignores the known raw length. ---
+
+#[cfg(feature = "zxc")]
+fn zxc_level(level: i32) -> zxc::Level {
+    match level {
+        1 => zxc::Level::Fastest,
+        2 => zxc::Level::Fast,
+        3 => zxc::Level::Default,
+        4 => zxc::Level::Balanced,
+        5 => zxc::Level::Compact,
+        _ => zxc::Level::Density,
+    }
+}
+
+#[cfg(feature = "zxc")]
+fn zxc_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    zxc::compress(data, zxc_level(level), None).map_err(|_| DifError::CompressionFailed)
+}
+
+#[cfg(feature = "zxc")]
+fn zxc_decompress(data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
+    zxc::decompress(data).map_err(|_| DifError::CompressionFailed)
+}
+
+#[cfg(not(feature = "zxc"))]
+fn zxc_compress(_data: &[u8], _level: i32) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("zxc codec requires the `zxc` feature"))
+}
+
+#[cfg(not(feature = "zxc"))]
+fn zxc_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("zxc codec requires the `zxc` feature"))
 }
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
@@ -624,6 +664,7 @@ mod tests {
         {
             codecs.push("zstd-3");
             codecs.push("lzav-1");
+            codecs.push("zxc-3");
         }
         for name in codecs {
             let c = Codec::parse(name).unwrap();
