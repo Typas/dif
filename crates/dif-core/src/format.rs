@@ -209,11 +209,15 @@ pub(crate) fn read_palettes(
 /// One frame's index plane: `width*height` indices at `width`.
 pub(crate) fn frame_bitmap_bytes(indices: &[u64], width: IndexWidth, out: &mut Vec<u8>) {
     match width {
-        IndexWidth::Eight => out.extend(indices.iter().map(|&i| i as u8)),
-        IndexWidth::Sixteen => {
+        IndexWidth::Bit8 => out.extend(indices.iter().map(|&i| i as u8)),
+        IndexWidth::Bit16 => {
             for &i in indices {
                 out.extend_from_slice(&(i as u16).to_le_bytes());
             }
+        }
+        // Serialization is only reached after `validate` accepts the width.
+        IndexWidth::Bit32 | IndexWidth::Bit64 => {
+            unreachable!("unsupported index width reaches serialization")
         }
     }
 }
@@ -225,11 +229,15 @@ pub(crate) fn read_frame_bitmap(bytes: &[u8], px: usize, width: IndexWidth) -> R
     }
     let mut out = Vec::with_capacity(px);
     match width {
-        IndexWidth::Eight => out.extend(bytes[..px].iter().map(|&b| b as u64)),
-        IndexWidth::Sixteen => {
+        IndexWidth::Bit8 => out.extend(bytes[..px].iter().map(|&b| b as u64)),
+        IndexWidth::Bit16 => {
             for c in bytes[..px * 2].chunks_exact(2) {
                 out.push(u16::from_le_bytes([c[0], c[1]]) as u64);
             }
+        }
+        // An unsupported width forged into the flags: reject with its bit count.
+        IndexWidth::Bit32 | IndexWidth::Bit64 => {
+            return Err(DifError::BadIndexWidth((width.bytes() * 8) as u8))
         }
     }
     Ok(out)

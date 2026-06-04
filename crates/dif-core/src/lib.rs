@@ -30,6 +30,8 @@ pub mod codec;
 pub mod derive;
 pub mod error;
 pub mod format;
+#[cfg(feature = "derive")]
+pub mod quantize;
 
 pub use codec::{from_dif, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId};
 #[cfg(feature = "derive")]
@@ -71,59 +73,75 @@ impl ThemeTag {
 
 /// Width of one palette index in the constant-width index plane.
 ///
-/// 32- and 64-bit are defined by the flags but unsupported by this build; parsing
-/// them yields [`DifError::BadIndexWidth`].
+/// All four widths the flags byte can encode are named, but only 8- and 16-bit are
+/// supported by this build (see [`IndexWidth::supported`]); a [`DifImage`] carrying
+/// [`Bit32`](IndexWidth::Bit32)/[`Bit64`](IndexWidth::Bit64) is rejected by
+/// [`DifImage::validate`]. The encoder never produces them — it quantizes down to
+/// the widest supported width instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IndexWidth {
-    Eight,
-    Sixteen,
+    Bit8,
+    Bit16,
+    Bit32,
+    Bit64,
 }
 
 impl IndexWidth {
     /// Bytes used to store one index on disk.
     pub fn bytes(self) -> usize {
         match self {
-            IndexWidth::Eight => 1,
-            IndexWidth::Sixteen => 2,
+            IndexWidth::Bit8 => 1,
+            IndexWidth::Bit16 => 2,
+            IndexWidth::Bit32 => 4,
+            IndexWidth::Bit64 => 8,
         }
     }
-    /// Number of distinct indices representable (`256` or `65536`).
+    /// Number of distinct indices representable (`256`, `65536`, `1<<32`, or — for
+    /// 64-bit — `u64::MAX`, capped to avoid overflowing the `u64` count space).
     pub fn capacity(self) -> u64 {
         match self {
-            IndexWidth::Eight => 256,
-            IndexWidth::Sixteen => 65536,
+            IndexWidth::Bit8 => 256,
+            IndexWidth::Bit16 => 65536,
+            IndexWidth::Bit32 => 1 << 32,
+            IndexWidth::Bit64 => u64::MAX,
         }
+    }
+    /// Whether this build can encode/decode the width. Only 8- and 16-bit are
+    /// wired up; 32-/64-bit are named for the flags layout but not implemented.
+    pub fn supported(self) -> bool {
+        matches!(self, IndexWidth::Bit8 | IndexWidth::Bit16)
     }
     /// The flags byte's two low bits for this width.
     pub fn to_bits(self) -> u8 {
         match self {
-            IndexWidth::Eight => 0b00,
-            IndexWidth::Sixteen => 0b01,
+            IndexWidth::Bit8 => 0b00,
+            IndexWidth::Bit16 => 0b01,
+            IndexWidth::Bit32 => 0b10,
+            IndexWidth::Bit64 => 0b11,
         }
     }
-    /// Parse from the flags byte's two low bits. `0b10`/`0b11` (32-/64-bit) are
-    /// defined but unsupported.
+    /// Parse from the flags byte's two low bits. All four are recognized; the
+    /// unsupported ones (`Bit32`/`Bit64`) are rejected later by [`DifImage::validate`].
     pub fn from_bits(bits: u8) -> Result<Self> {
-        match bits & 0b11 {
-            0b00 => Ok(IndexWidth::Eight),
-            0b01 => Ok(IndexWidth::Sixteen),
-            other => Err(DifError::BadIndexWidth(match other {
-                0b10 => 32,
-                _ => 64,
-            })),
-        }
+        Ok(match bits & 0b11 {
+            0b00 => IndexWidth::Bit8,
+            0b01 => IndexWidth::Bit16,
+            0b10 => IndexWidth::Bit32,
+            _ => IndexWidth::Bit64,
+        })
     }
-    /// Smallest width that can index `count` colors, or an error if `count`
-    /// exceeds the supported 16-bit ceiling.
-    pub fn for_count(count: u64) -> Result<Self> {
+    /// The smallest width that *would* hold `count` colors — a suggestion, not a
+    /// guarantee it is supported. The encoder uses this to learn the natural width
+    /// and, when it exceeds the widest supported width, quantizes down to fit.
+    pub fn for_count(count: u64) -> Self {
         if count <= 256 {
-            Ok(IndexWidth::Eight)
+            IndexWidth::Bit8
         } else if count <= 65536 {
-            Ok(IndexWidth::Sixteen)
+            IndexWidth::Bit16
+        } else if count <= 1 << 32 {
+            IndexWidth::Bit32
         } else {
-            Err(DifError::Invalid(
-                "palette exceeds the 16-bit index ceiling",
-            ))
+            IndexWidth::Bit64
         }
     }
 }
@@ -284,6 +302,11 @@ impl DifImage {
         if self.palettes.iter().any(|p| p.len() != cc) {
             return Err(DifError::Invalid("themes have differing palette sizes"));
         }
+        if !self.index_width.supported() {
+            return Err(DifError::BadIndexWidth(
+                (self.index_width.bytes() * 8) as u8,
+            ));
+        }
         if cc as u64 > self.index_width.capacity() {
             return Err(DifError::Invalid(
                 "index_count exceeds index width capacity",
@@ -358,7 +381,20 @@ impl DifImage {
 /// bytes), so the hottest colors get the lowest indices. The image gets one
 /// light-capable theme with a white base color; add a derived dark theme with
 /// [`derive::derive_dark_palette`] afterwards.
-pub fn indexed_from_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<DifImage> {
+///
+/// `want` selects the index width: `None` auto-fits the smallest supported width
+/// (quantizing when the source exceeds 16-bit), `Some(w)` forces width `w`
+/// (quantizing down whenever the source has more colors than `w` can index). A
+/// forced unsupported width (`Bit32`/`Bit64`) is an error.
+///
+/// Returns the image plus `Some(n)` when the palette was quantized — `n` is the
+/// source's unique-color count before reduction — or `None` when it fit losslessly.
+pub fn indexed_from_rgba8(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    want: Option<IndexWidth>,
+) -> Result<(DifImage, Option<u64>)> {
     #[cfg(not(feature = "std"))]
     use alloc::collections::BTreeMap as ColorMap;
     #[cfg(feature = "std")]
@@ -376,13 +412,55 @@ pub fn indexed_from_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<DifIma
         *map.entry(key).or_insert(0) += 1;
     }
 
-    // Order by frequency (desc), tie-break by key (asc) for determinism.
+    // Choose the target width: forced by `want`, else the smallest *supported*
+    // width that fits — `for_count` may suggest an unsupported 32/64-bit width,
+    // which we clamp to `Bit16` and quantize down into.
+    let source = map.len() as u64;
+    let index_width = match want {
+        Some(w) => w,
+        None => {
+            let natural = IndexWidth::for_count(source);
+            if natural.supported() {
+                natural
+            } else {
+                IndexWidth::Bit16
+            }
+        }
+    };
+    if !index_width.supported() {
+        return Err(DifError::BadIndexWidth((index_width.bytes() * 8) as u8));
+    }
+    let capacity = index_width.capacity() as usize;
+
+    // Quantize between pass 1 and the reorder when the palette overflows the
+    // target width: `quantize_oklab` rewrites `map` to representative keys ->
+    // summed frequency and hands back `subst` (original key -> representative key)
+    // for pass 2. `None` = the palette fit, so pass 2 maps keys straight through.
+    // `source_colors` records the pre-quantization count only when reduced.
+    #[cfg(feature = "derive")]
+    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) =
+        if map.len() > capacity {
+            (Some(quantize::quantize_oklab(&mut map, capacity)), Some(source))
+        } else {
+            (None, None)
+        };
+    // Without `derive` there is no quantizer, so an overflowing palette is an error.
+    #[cfg(not(feature = "derive"))]
+    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) =
+        if map.len() > capacity {
+            return Err(DifError::Invalid(
+                "palette exceeds the index width capacity (build with the `derive` feature to quantize)",
+            ));
+        } else {
+            (None, None)
+        };
+
+    // Order by frequency (desc), tie-break by key (asc) for determinism. After
+    // quantization `map` holds the representative colors, so this orders those.
     let mut order: Vec<(u32, u32)> = map.iter().map(|(&k, &c)| (k, c)).collect();
     order.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let index_width = IndexWidth::for_count(order.len() as u64)?;
-
-    // Materialize the palette and repurpose `map` as color -> final index.
+    // Materialize the palette and repurpose `map` as (representative) color -> index.
     let mut palette: Vec<Rgba> = Vec::with_capacity(order.len());
     for (idx, (key, _)) in order.iter().enumerate() {
         let b = key.to_le_bytes();
@@ -395,11 +473,16 @@ pub fn indexed_from_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<DifIma
         map.insert(*key, idx as u32);
     }
 
-    // Pass 2: emit the index frame against the frequency-ordered palette.
+    // Pass 2: emit the index frame. Each pixel's color resolves to its
+    // representative (identity when not quantized), then to that color's index.
     let mut indices: Vec<u64> = Vec::with_capacity(px);
     for chunk in rgba.chunks_exact(4) {
         let key = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        indices.push(map[&key] as u64);
+        let rep = match &subst {
+            Some(s) => s[&key],
+            None => key,
+        };
+        indices.push(map[&rep] as u64);
     }
 
     let img = DifImage {
@@ -419,7 +502,7 @@ pub fn indexed_from_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<DifIma
         replay_count: 1,
     };
     img.validate()?;
-    Ok(img)
+    Ok((img, source_colors))
 }
 
 #[cfg(test)]
@@ -435,7 +518,8 @@ mod tests {
         let a = [10u8, 20, 30, 255];
         let b = [200u8, 100, 50, 255];
         let rgba: Vec<u8> = [b, a, a, a].concat();
-        let img = indexed_from_rgba8(2, 2, &rgba).unwrap();
+        let (img, quantized) = indexed_from_rgba8(2, 2, &rgba, None).unwrap();
+        assert!(quantized.is_none(), "4 colors fit 8-bit without quantizing");
         let (palette, frame) = parts(&img);
         assert_eq!(
             palette[0],
@@ -444,7 +528,7 @@ mod tests {
         );
         assert_eq!(palette[1], Rgba::new(200, 100, 50, 255));
         assert_eq!(frame, &alloc::vec![1u64, 0, 0, 0]);
-        assert_eq!(img.index_width, IndexWidth::Eight);
+        assert_eq!(img.index_width, IndexWidth::Bit8);
         assert_eq!(img.color_depth, ColorDepth::Rgba8);
     }
 
@@ -455,7 +539,7 @@ mod tests {
             width: 1,
             height: 1,
             color_depth: ColorDepth::Rgba8,
-            index_width: IndexWidth::Eight,
+            index_width: IndexWidth::Bit8,
             themes: alloc::vec![
                 Theme {
                     abilities: abilities::LIGHT,
@@ -487,11 +571,86 @@ mod tests {
     }
 
     #[test]
-    fn reject_oversized_palette() {
-        // 257 distinct colors still fit 16-bit; emulate via the count helper.
-        assert_eq!(IndexWidth::for_count(256).unwrap(), IndexWidth::Eight);
-        assert_eq!(IndexWidth::for_count(257).unwrap(), IndexWidth::Sixteen);
-        assert_eq!(IndexWidth::for_count(65536).unwrap(), IndexWidth::Sixteen);
-        assert!(IndexWidth::for_count(65537).is_err());
+    fn for_count_suggests_smallest_holding_width() {
+        assert_eq!(IndexWidth::for_count(256), IndexWidth::Bit8);
+        assert_eq!(IndexWidth::for_count(257), IndexWidth::Bit16);
+        assert_eq!(IndexWidth::for_count(65536), IndexWidth::Bit16);
+        // Beyond 16-bit it suggests an *unsupported* width rather than erroring;
+        // the encoder reads that as "must quantize".
+        assert_eq!(IndexWidth::for_count(65537), IndexWidth::Bit32);
+        assert!(!IndexWidth::for_count(65537).supported());
+        assert_eq!(IndexWidth::for_count((1 << 32) + 1), IndexWidth::Bit64);
+    }
+
+    #[test]
+    fn index_width_table_round_trips_all_four() {
+        for (w, bits, bytes) in [
+            (IndexWidth::Bit8, 0b00u8, 1usize),
+            (IndexWidth::Bit16, 0b01, 2),
+            (IndexWidth::Bit32, 0b10, 4),
+            (IndexWidth::Bit64, 0b11, 8),
+        ] {
+            assert_eq!(w.to_bits(), bits);
+            assert_eq!(IndexWidth::from_bits(bits).unwrap(), w);
+            assert_eq!(w.bytes(), bytes);
+        }
+        assert!(IndexWidth::Bit8.supported() && IndexWidth::Bit16.supported());
+        assert!(!IndexWidth::Bit32.supported() && !IndexWidth::Bit64.supported());
+    }
+
+    #[test]
+    fn forced_unsupported_width_errors() {
+        let rgba = [0u8; 16]; // 2x2, one color
+        assert!(matches!(
+            indexed_from_rgba8(2, 2, &rgba, Some(IndexWidth::Bit32)),
+            Err(DifError::BadIndexWidth(32))
+        ));
+    }
+
+    /// Build an `(side*side)`-pixel image whose every pixel is a distinct color
+    /// (so unique-color count == pixel count), with `a` cycling so alpha varies.
+    #[cfg(test)]
+    fn distinct_colors(side: u32) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity((side * side * 4) as usize);
+        for i in 0..(side * side) {
+            rgba.extend_from_slice(&[
+                (i & 0xff) as u8,
+                ((i >> 8) & 0xff) as u8,
+                ((i >> 4) & 0xff) as u8,
+                (200 + (i % 56)) as u8,
+            ]);
+        }
+        rgba
+    }
+
+    #[cfg(feature = "derive")]
+    #[test]
+    fn quantize_forced_8bit_reduces_deterministically() {
+        let side = 20; // 400 distinct colors -> must fold into <= 256
+        let rgba = distinct_colors(side);
+        let (img, q) =
+            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
+        assert_eq!(img.index_width, IndexWidth::Bit8);
+        assert!(img.palettes[0].len() <= 256, "palette must fit 8-bit");
+        assert_eq!(q, Some(400), "reports pre-quantization color count");
+        // Every emitted index is in range (also asserted by `validate`).
+        assert!(img.frames[0].indices.iter().all(|&i| (i as usize) < img.palettes[0].len()));
+        // Deterministic: same bytes + same metadata on a second run.
+        let (img2, q2) =
+            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
+        assert_eq!(to_difr(&img).unwrap(), to_difr(&img2).unwrap());
+        assert_eq!(q, q2);
+    }
+
+    #[cfg(feature = "derive")]
+    #[test]
+    fn forced_16bit_keeps_all_colors_without_quantizing() {
+        let side = 20; // 400 distinct colors all fit 16-bit
+        let rgba = distinct_colors(side);
+        let (img, q) =
+            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit16)).unwrap();
+        assert_eq!(img.index_width, IndexWidth::Bit16);
+        assert_eq!(img.palettes[0].len(), 400);
+        assert_eq!(q, None, "fit losslessly, so not quantized");
     }
 }

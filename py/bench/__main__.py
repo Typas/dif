@@ -110,6 +110,16 @@ def main(argv: list[str] | None = None) -> int:
         "runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
+        "--index-width",
+        nargs="+",
+        choices=("auto", "8", "16"),
+        default=["auto"],
+        metavar="WIDTH",
+        help="DIF index width(s): auto-fit (default), or force 8/16-bit (quantizes "
+        "to fit). Multiple values enumerate a dif row set per width. The resolved "
+        "width shows in each row label as -8b/-16b",
+    )
+    f.add_argument(
         "--out",
         default="bench-formats.tsv",
         help="per-(image,format) results as TSV (default: bench-formats.tsv)",
@@ -177,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.dif_frame_codecs,
                     stream=True,
                     numthreads=args.numthreads,
+                    index_widths=args.index_width,
                 )
                 print()
                 w.writerows(cmp.iter_rows(p, rows))

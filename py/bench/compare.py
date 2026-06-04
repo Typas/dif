@@ -83,12 +83,13 @@ def _abbr(variant: str) -> str:
     return base + (lvl or _DEFAULT_LEVEL[fam])
 
 
-def _dif_label(outer: str, palette: str, frame: str) -> str:
-    """`dif-<outer>` when palette/frame inherit the outer codec, else
-    `dif-<outer>-<palette>-<frame>`."""
+def _dif_label(outer: str, palette: str, frame: str, index_bits: int) -> str:
+    """`dif-<outer>-<Nb>` when palette/frame inherit the outer codec, else
+    `dif-<outer>-<palette>-<frame>-<Nb>`. The `-<Nb>` suffix (`-8b`/`-16b`) is the
+    *resolved* index width, so the row shows which profile the build landed on."""
     if palette == outer and frame == outer:
-        return f"dif-{_abbr(outer)}"
-    return f"dif-{_abbr(outer)}-{_abbr(palette)}-{_abbr(frame)}"
+        return f"dif-{_abbr(outer)}-{index_bits}b"
+    return f"dif-{_abbr(outer)}-{_abbr(palette)}-{_abbr(frame)}-{index_bits}b"
 
 
 @dataclass
@@ -145,6 +146,7 @@ def compare_image(
     frame_codecs: tuple[str, ...] | list[str] | None = None,
     stream: bool = False,
     numthreads: int = 1,
+    index_widths: tuple[str, ...] | list[str] = ("auto",),
 ) -> list[FormatResult]:
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
@@ -180,8 +182,8 @@ def compare_image(
     # The whole `.dif` is encoded all-mt or all-st: workers come from --numthreads.
     workers = numthreads if numthreads > 1 else 0
 
-    def dif_enc(strategy: str, outer: str, palette: str, frame: str):
-        return lambda: dif_image_from_array(arr, strategy).to_dif(
+    def dif_enc(strategy: str, outer: str, palette: str, frame: str, iw: str):
+        return lambda: dif_image_from_array(arr, strategy, iw).to_dif(
             cast("dif.CodecName", outer),
             cast("dif.CodecName", palette),
             cast("dif.CodecName", frame),
@@ -191,6 +193,14 @@ def compare_image(
     def dif_dec(b: bytes):
         return dif.Image.from_dif(b).render("light", (255, 255, 255), 0)[2]
 
+    def dif_meta(iw: str) -> tuple[int, str]:
+        """Resolve `(index_bits, note)` for width request `iw` from one untimed
+        build — the timed encoder rebuilds, so this only reads metadata. The note
+        reports the pre-quantization color count when the palette was reduced."""
+        img = dif_image_from_array(arr, "keep", iw)
+        note = f"quant {img.source_colors}" if img.quantized() else ""
+        return img.index_bits, note
+
     # The `rel` reference row (REL_REF picks it by name) is emitted first so every
     # row below has a live ratio and the table is topped by the baseline. png's
     # name and encoder are one unit; REL_REF only selects which row rel divides by.
@@ -199,30 +209,40 @@ def compare_image(
     # get a stale live ratio. Drive the first-emit off REL_REF, or assert they agree.
     emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
 
-    # Headline row: the shipped default (zstd-3) carrying *both* themes
-    # (light + dark) — the real `.dif` product, not directly size-comparable to
-    # the single-image formats below.
-    emit(
-        f"{_dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE)}-2t",
-        dif_enc("arithmetic", DIF_BASELINE, DIF_BASELINE, DIF_BASELINE),
-        dif_dec,
-        None,
-    )
-
-    # Codec comparison: one theme each (apples-to-apples with the single-image
-    # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --numthreads.
-    # palette/frame default to inheriting the outer codec; given lists run the
-    # cartesian product. DIF losslessness is covered in tests.
+    # All DIF rows for one index-width request share its resolved width + quant
+    # note (the palette — hence the width — is the same across codecs/themes).
     pcs = list(palette_codecs) if palette_codecs else [None]
     fcs = list(frame_codecs) if frame_codecs else [None]
-    for outer in dif_codecs:
-        for pal in pcs:
-            for frm in fcs:
-                p = outer if pal is None else pal
-                f = outer if frm is None else frm
-                emit(
-                    _dif_label(outer, p, f), dif_enc("keep", outer, p, f), dif_dec, None
-                )
+    for iw in index_widths:
+        bits, note = dif_meta(iw)
+
+        # Headline row: the shipped default (zstd-3) carrying *both* themes
+        # (light + dark) — the real `.dif` product, not directly size-comparable to
+        # the single-image formats below.
+        emit(
+            f"{_dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, bits)}-2t",
+            dif_enc("arithmetic", DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, iw),
+            dif_dec,
+            None,
+            note,
+        )
+
+        # Codec comparison: one theme each (apples-to-apples with the single-image
+        # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --numthreads.
+        # palette/frame default to inheriting the outer codec; given lists run the
+        # cartesian product. DIF losslessness is covered in tests.
+        for outer in dif_codecs:
+            for pal in pcs:
+                for frm in fcs:
+                    p = outer if pal is None else pal
+                    f = outer if frm is None else frm
+                    emit(
+                        _dif_label(outer, p, f, bits),
+                        dif_enc("keep", outer, p, f, iw),
+                        dif_dec,
+                        None,
+                        note,
+                    )
 
     # avif/jxl pinned to their library's *native default* effort knob so the
     # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs

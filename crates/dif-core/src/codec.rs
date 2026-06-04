@@ -480,6 +480,10 @@ fn decode(bytes: &[u8]) -> Result<DifImage> {
     let h = Header::read(bytes)?;
     let depth = h.color_depth()?;
     let iw = h.index_width()?;
+    // The flags can name 32-/64-bit widths, but this build only handles 8-/16-bit.
+    if !iw.supported() {
+        return Err(DifError::BadIndexWidth((iw.bytes() * 8) as u8));
+    }
     let t = h.theme_count;
     if t == 0 || t > 256 {
         return Err(DifError::BadThemeCount(t));
@@ -643,7 +647,7 @@ mod tests {
     #[test]
     fn difr_roundtrip_all_combos() {
         for depth in [ColorDepth::Rgba8, ColorDepth::Rgba16] {
-            for iw in [IndexWidth::Eight, IndexWidth::Sixteen] {
+            for iw in [IndexWidth::Bit8, IndexWidth::Bit16] {
                 let img = sample(depth, iw);
                 let bytes = to_difr(&img).unwrap();
                 assert_eq!(&bytes[..5], b"DIFR3");
@@ -655,7 +659,7 @@ mod tests {
 
     #[test]
     fn dif_roundtrip_codec_matrix() {
-        let img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
+        let img = sample(ColorDepth::Rgba8, IndexWidth::Bit8);
         #[allow(unused_mut)]
         let mut codecs = vec!["store", "deflate", "lz4"];
         #[cfg(feature = "std")]
@@ -680,7 +684,7 @@ mod tests {
 
     #[test]
     fn multi_frame_random_access_offsets() {
-        let mut img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
+        let mut img = sample(ColorDepth::Rgba8, IndexWidth::Bit8);
         img.frames = vec![
             Frame {
                 delay_us: 100,
@@ -705,7 +709,7 @@ mod tests {
 
     #[test]
     fn render_picks_dark_theme() {
-        let img = sample(ColorDepth::Rgba8, IndexWidth::Eight);
+        let img = sample(ColorDepth::Rgba8, IndexWidth::Bit8);
         // dark palette: idx0=black, idx1=white. frame[0..2] = [0,1].
         let rgba = img.render_rgba8(ThemeTag::Dark, [0, 0, 0], 0).unwrap();
         assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
@@ -737,7 +741,7 @@ mod tests {
     #[test]
     fn bad_magic_rejected() {
         let mut bytes = to_dif(
-            &sample(ColorDepth::Rgba8, IndexWidth::Eight),
+            &sample(ColorDepth::Rgba8, IndexWidth::Bit8),
             Codec::store(),
             Codec::store(),
             Codec::store(),
@@ -749,7 +753,7 @@ mod tests {
 
     #[test]
     fn reject_32bit_index_width() {
-        let mut bytes = to_difr(&sample(ColorDepth::Rgba8, IndexWidth::Eight)).unwrap();
+        let mut bytes = to_difr(&sample(ColorDepth::Rgba8, IndexWidth::Bit8)).unwrap();
         bytes[9] = (bytes[9] & !0b11) | 0b10; // index width -> 32-bit
         assert!(matches!(
             from_difr(&bytes),

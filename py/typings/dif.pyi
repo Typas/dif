@@ -72,9 +72,13 @@ class Image:
         ...
 
     @staticmethod
-    def indexed_from_rgba8(width: int, height: int, rgba: bytes) -> Image:
+    def indexed_from_rgba8(
+        width: int, height: int, rgba: bytes, index_width: int | None = ...
+    ) -> Image:
         """Build a single-theme (light) indexed image from a packed RGBA8 buffer
-        (`4 * width * height` bytes). Palette dedup + index build run natively."""
+        (`4 * width * height` bytes). Palette dedup + index build run natively.
+        `index_width` is `None` (auto-fit, quantizing only above 16-bit), `8`, or
+        `16` (force that width, quantizing down when the source has more colors)."""
         ...
 
     def add_dark_theme(self, strategy: Strategy) -> None:
@@ -117,6 +121,15 @@ class Image:
     def color_bits(self) -> int: ...
     @property
     def index_bits(self) -> int: ...
+    def quantized(self) -> bool:
+        """`True` when the palette was OKLab-quantized to fit the index width."""
+        ...
+
+    @property
+    def source_colors(self) -> int | None:
+        """Unique-color count before quantization, or `None` if not quantized."""
+        ...
+
     @property
     def frame_count(self) -> int: ...
     @property

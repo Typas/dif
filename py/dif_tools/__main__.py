@@ -62,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     conv.add_argument(
         "--raw", action="store_true", help="write uncompressed .difr instead"
     )
+    conv.add_argument(
+        "--index-width",
+        choices=("auto", "8", "16"),
+        default="auto",
+        help="palette index width: auto-fit, or force 8/16-bit (quantizes to fit)",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "convert":
@@ -73,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             palette_codec=args.palette_codec,
             frame_codec=args.frame_codec,
             raw=args.raw,
+            index_width=args.index_width,
         )
         print(f"wrote {args.output} ({len(data)} bytes)")
     return 0

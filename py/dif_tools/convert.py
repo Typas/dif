@@ -53,26 +53,43 @@ def resolve_raster(path: str | Path) -> Path:
     return path
 
 
-def image_to_dif_image(path: str | Path, strategy: str = "arithmetic") -> "dif.Image":
+def _index_width_arg(index_width: str) -> int | None:
+    """Map the ``"auto"``/``"8"``/``"16"`` CLI string to the binding's
+    ``index_width`` (``None`` for auto, else the bit count)."""
+    if index_width == "auto":
+        return None
+    if index_width in ("8", "16"):
+        return int(index_width)
+    raise ValueError(f"index_width must be 'auto', '8', or '16', got {index_width!r}")
+
+
+def image_to_dif_image(
+    path: str | Path, strategy: str = "arithmetic", index_width: str = "auto"
+) -> "dif.Image":
     """Build a :class:`dif.Image` from an image (or ``.drawio``) file.
 
     A ``.drawio`` input is first rendered to a PNG under ``out/drawio-png/``
     (keeping ``data/testdata/`` clean) and then loaded like any raster image.
     """
     arr = load_image(resolve_raster(path))
-    return dif_image_from_array(arr, strategy)
+    return dif_image_from_array(arr, strategy, index_width)
 
 
-def dif_image_from_array(arr: np.ndarray, strategy: str = "arithmetic") -> "dif.Image":
+def dif_image_from_array(
+    arr: np.ndarray, strategy: str = "arithmetic", index_width: str = "auto"
+) -> "dif.Image":
     """Build a :class:`dif.Image` from an already-loaded ``(H, W, 4)`` RGBA8 array.
 
     Splits the in-memory build (palette/index + dark-theme synthesis) from disk
     I/O so callers that already hold the pixels — e.g. the format benchmark —
     can time *raw bitmap -> file* without re-reading the source. ``strategy``
     ``"keep"`` stores a single (light) theme; any other adds the dark theme.
+    ``index_width`` is ``"auto"`` (smallest fitting width, quantizing only above
+    16-bit), ``"8"``, or ``"16"`` (force that width, quantizing down to fit).
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
+    iw = _index_width_arg(index_width)
 
     # Hand the raw bitmap to Rust and build the palette/index natively — like
     # `png_encode(arr)` — instead of running `np.unique`/`.tolist()` over millions
@@ -80,7 +97,7 @@ def dif_image_from_array(arr: np.ndarray, strategy: str = "arithmetic") -> "dif.
     # ~99% of DIF encode time).
     h, w = arr.shape[:2]
     rgba = np.ascontiguousarray(arr[..., :4], dtype=np.uint8).tobytes()
-    img = dif.Image.indexed_from_rgba8(w, h, rgba)
+    img = dif.Image.indexed_from_rgba8(w, h, rgba, iw)
 
     # Synthesize the dark theme natively: the OKLab palette derivation runs in
     # Rust off the small light palette, so no palette crosses the FFI boundary.
@@ -99,6 +116,7 @@ def convert_file(
     palette_codec: str = "store",
     frame_codec: str = "store",
     raw: bool = False,
+    index_width: str = "auto",
 ) -> bytes:
     """Convert an image to ``.dif`` (or ``.difr`` if ``raw``); returns the bytes.
 
@@ -106,8 +124,9 @@ def convert_file(
     compress the palette and per-frame sections (default ``"store"`` for the
     random-access layout). Each is one of the study's variant strings (e.g.
     ``"zstd-3"``, ``"brotli-11"``, ``"lz4-fast1"``); see :data:`dif.CodecName`.
+    ``index_width`` is ``"auto"``/``"8"``/``"16"`` (see :func:`dif_image_from_array`).
     """
-    img = image_to_dif_image(input_path, strategy=strategy)
+    img = image_to_dif_image(input_path, strategy=strategy, index_width=index_width)
     if raw:
         data = img.to_difr()
     else:

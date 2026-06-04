@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from PIL import Image as PILImage
 
-from dif_tools import image_to_dif_image
+from dif_tools import dif_image_from_array, image_to_dif_image
 from dif_tools.themes import derive_base_color, derive_palette
 
 _LIGHT = (255, 255, 255)
@@ -135,3 +135,58 @@ def test_arithmetic_chromatic_stays_visible():
 def test_derive_base_color():
     assert derive_base_color((255, 255, 255), "invert") == (0, 0, 0)
     assert derive_base_color((0, 0, 0), "invert") == (255, 255, 255)
+
+
+# --- Index width + OKLab quantization -------------------------------------
+
+
+def _distinct(side: int = 40) -> np.ndarray:
+    """An ``(side, side, 4)`` array whose ``side*side`` pixels are all distinct
+    colors (the low/high bytes of the pixel index encode R/G uniquely)."""
+    n = side * side
+    idx = np.arange(n, dtype=np.uint32)
+    flat = np.zeros((n, 4), np.uint8)
+    flat[:, 0] = idx & 0xFF
+    flat[:, 1] = (idx >> 8) & 0xFF
+    flat[:, 3] = 255
+    return flat.reshape(side, side, 4)
+
+
+def test_auto_width_no_quant_for_small_palette():
+    arr = _distinct(8)  # 64 colors -> fits 8-bit losslessly
+    img = dif_image_from_array(arr, "keep")
+    assert img.index_bits == 8
+    assert img.quantized() is False
+    assert img.source_colors is None
+
+
+def test_forced_8bit_quantizes_many_colors():
+    arr = _distinct(40)  # 1600 colors -> must fold into 8-bit
+    img = dif_image_from_array(arr, "keep", "8")
+    assert img.index_bits == 8
+    assert img.quantized() is True
+    assert img.source_colors == 1600
+
+
+def test_forced_16bit_keeps_all_colors():
+    arr = _distinct(40)  # 1600 colors all fit 16-bit
+    img = dif_image_from_array(arr, "keep", "16")
+    assert img.index_bits == 16
+    assert img.quantized() is False
+    assert img.source_colors is None
+
+
+def test_quantized_dif_round_trips_to_valid_indices():
+    # A quantized image still decodes to a full RGBA8 raster of the right shape
+    # (lossy, so not byte-equal — just structurally sound).
+    arr = _distinct(40)
+    img = dif_image_from_array(arr, "keep", "8")
+    w, h, rgba = dif.Image.from_dif(img.to_dif("zstd-3")).render("light", _LIGHT, 0)
+    assert (w, h) == (40, 40)
+    assert len(rgba) == 40 * 40 * 4
+
+
+def test_invalid_index_width_rejected():
+    arr = _distinct(8)
+    with pytest.raises(ValueError):
+        dif_image_from_array(arr, "keep", "32")

@@ -37,7 +37,8 @@ def test_compare_image_covers_png_and_dif(tmp_path):
     assert png.available and png.lossless and png.size > 0
 
     # The shipped 2-theme headline row + the requested single-theme codec rows.
-    base = _dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE)  # "dif-zst3"
+    # The toy image has 3 colors, so it resolves to the 8-bit profile (-8b).
+    base = _dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, 8)  # "dif-zst3-8b"
     assert f"{base}-2t" in by_name
     assert by_name[base].available and by_name[base].size > 0
 
@@ -55,8 +56,9 @@ def test_dif_label_abbreviations():
     assert _abbr("lzav-1") == "av1"
     assert _abbr("zxc-3") == "zxc3"
     assert _abbr("store") == "st"
-    assert _dif_label("zstd-3", "zstd-3", "zstd-3") == "dif-zst3"
-    assert _dif_label("zstd-3", "store", "libdeflate-6") == "dif-zst3-st-PK6"
+    # The resolved index width is always suffixed (-8b / -16b).
+    assert _dif_label("zstd-3", "zstd-3", "zstd-3", 8) == "dif-zst3-8b"
+    assert _dif_label("zstd-3", "store", "libdeflate-6", 16) == "dif-zst3-st-PK6-16b"
 
 
 def test_dif_palette_frame_cartesian(tmp_path):
@@ -69,8 +71,8 @@ def test_dif_palette_frame_cartesian(tmp_path):
         frame_codecs=("store",),
     )
     names = {r.name for r in rows}
-    assert "dif-zst3-st-st" in names
-    assert "dif-zst3-PK6-st" in names
+    assert "dif-zst3-st-st-8b" in names
+    assert "dif-zst3-PK6-st-8b" in names
 
 
 def test_unavailable_codec_is_annotated_not_raised(tmp_path):
@@ -78,7 +80,7 @@ def test_unavailable_codec_is_annotated_not_raised(tmp_path):
     # back available=False with a note instead of bubbling an exception.
     p = _toy_png(tmp_path / "d.png")
     rows = compare_image(p, repeats=1, dif_codecs=("not-a-codec",))
-    bad = next(r for r in rows if r.name == "dif-not-a-codec")
+    bad = next(r for r in rows if r.name == "dif-not-a-codec-8b")
     assert not bad.available and bad.note
 
 

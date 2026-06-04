@@ -77,6 +77,10 @@ fn themes_out(img: &DifImage) -> Vec<(u8, (u8, u8, u8))> {
 #[pyclass]
 pub struct Image {
     inner: DifImage,
+    /// Unique-color count of the source before palette quantization, or `None`
+    /// when the image fit its index width losslessly. Only `indexed_from_rgba8`
+    /// can set it; images loaded from a `.dif`/`.difr` carry `None`.
+    source_colors: Option<u64>,
 }
 
 #[pymethods]
@@ -105,7 +109,9 @@ impl Image {
         replay_count: u16,
     ) -> PyResult<Image> {
         let index_count = palettes.first().map_or(0, |p| p.len());
-        let index_width = IndexWidth::for_count(index_count as u64).map_err(map_err)?;
+        // `for_count` may suggest an unsupported 32/64-bit width for a huge
+        // explicit palette; `validate` below rejects it.
+        let index_width = IndexWidth::for_count(index_count as u64);
         let palettes: Vec<Vec<Rgba>> = palettes
             .into_iter()
             .map(|p| {
@@ -133,7 +139,7 @@ impl Image {
             replay_count,
         };
         inner.validate().map_err(map_err)?;
-        Ok(Image { inner })
+        Ok(Image { inner, source_colors: None })
     }
 
     /// Build a single-theme (light) indexed image straight from a packed RGBA8
@@ -141,11 +147,33 @@ impl Image {
     /// Rust, so Python hands over the raw bitmap instead of marshalling a per-pixel
     /// index list across the FFI boundary. Add a derived dark theme afterwards with
     /// [`Image::add_dark_theme`].
+    ///
+    /// `index_width` is `None` (auto-fit the smallest supported width, quantizing
+    /// only when the source exceeds 16-bit), `8`, or `16` (force that width,
+    /// quantizing down when the source has more colors than it can index). When the
+    /// palette is quantized, [`Image::quantized`] is `True` and
+    /// [`Image::source_colors`] reports the pre-quantization color count.
     #[staticmethod]
-    #[pyo3(signature = (width, height, rgba))]
-    fn indexed_from_rgba8(width: u32, height: u32, rgba: &[u8]) -> PyResult<Image> {
-        let inner = indexed_from_rgba8(width, height, rgba).map_err(map_err)?;
-        Ok(Image { inner })
+    #[pyo3(signature = (width, height, rgba, index_width=None))]
+    fn indexed_from_rgba8(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        index_width: Option<u32>,
+    ) -> PyResult<Image> {
+        let want = match index_width {
+            None => None,
+            Some(8) => Some(IndexWidth::Bit8),
+            Some(16) => Some(IndexWidth::Bit16),
+            Some(n) => {
+                return Err(PyValueError::new_err(format!(
+                    "index_width must be 8 or 16, got {n}"
+                )))
+            }
+        };
+        let (inner, source_colors) =
+            indexed_from_rgba8(width, height, rgba, want).map_err(map_err)?;
+        Ok(Image { inner, source_colors })
     }
 
     /// Derive a dark theme natively from theme 0's palette + base color and append
@@ -221,6 +249,7 @@ impl Image {
     fn from_dif(data: &[u8]) -> PyResult<Image> {
         Ok(Image {
             inner: from_dif(data).map_err(map_err)?,
+            source_colors: None,
         })
     }
 
@@ -229,6 +258,7 @@ impl Image {
     fn from_difr(data: &[u8]) -> PyResult<Image> {
         Ok(Image {
             inner: from_difr(data).map_err(map_err)?,
+            source_colors: None,
         })
     }
 
@@ -249,10 +279,18 @@ impl Image {
     }
     #[getter]
     fn index_bits(&self) -> u32 {
-        match self.inner.index_width {
-            IndexWidth::Eight => 8,
-            IndexWidth::Sixteen => 16,
-        }
+        (self.inner.index_width.bytes() * 8) as u32
+    }
+    /// `True` when the palette was reduced (OKLab-quantized) to fit the index
+    /// width; `False` when the source fit losslessly.
+    fn quantized(&self) -> bool {
+        self.source_colors.is_some()
+    }
+    /// The source's unique-color count before quantization, or `None` if the
+    /// palette was not quantized.
+    #[getter]
+    fn source_colors(&self) -> Option<u64> {
+        self.source_colors
     }
     #[getter]
     fn frame_count(&self) -> usize {
