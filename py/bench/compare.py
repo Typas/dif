@@ -17,7 +17,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import dif
 import imagecodecs
@@ -184,9 +183,9 @@ def compare_image(
 
     def dif_enc(strategy: str, outer: str, palette: str, frame: str, iw: str):
         return lambda: dif_image_from_array(arr, strategy, iw).to_dif(
-            cast("dif.CodecName", outer),
-            cast("dif.CodecName", palette),
-            cast("dif.CodecName", frame),
+            outer,
+            palette,
+            frame,
             workers=workers,
         )
 

@@ -122,7 +122,11 @@ A codec byte packs a 4-bit *family* and a 4-bit *level index*:
   [Zstandard],
   [`−7, −5, −3, −1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22`],
 
-  [5], [LZ4], [fast `99…1`, then HC `1…12`],
+  [5],
+  [LZ4],
+  [fast accel (neg) `−512, −256, −128, −64, −32, −16, −8, −4, −2, −1`, then HC
+    (pos) `2, 4, 6, 9, 10, 12`],
+
   [6], [LZAV], [`1, 2`],
 )
 

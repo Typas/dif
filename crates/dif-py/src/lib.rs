@@ -51,6 +51,14 @@ fn codec(s: &str) -> PyResult<Codec> {
     Codec::parse(s).map_err(map_err)
 }
 
+/// Validate a codec variant string against `Codec::parse` (the single source of
+/// truth) without encoding; raises `ValueError` on an unknown variant or level.
+/// Lets a caller reject a bad `--dif-codecs` spec up front, before the run.
+#[pyfunction]
+fn validate_codec(name: &str) -> PyResult<()> {
+    codec(name).map(|_| ())
+}
+
 fn build_themes(themes: Vec<(u8, (u8, u8, u8))>) -> Vec<Theme> {
     themes
         .into_iter()
@@ -341,6 +349,7 @@ fn dif(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Image>()?;
     m.add_function(wrap_pyfunction!(derive_dark_palette, m)?)?;
     m.add_function(wrap_pyfunction!(derive_dark_base_color, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_codec, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

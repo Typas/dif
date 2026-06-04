@@ -66,9 +66,12 @@ const BROTLI_LEVELS: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 // zxc levels 1..=6 (1 fastest, 6 densest).
 const ZXC_LEVELS: [i32; 6] = [1, 2, 3, 4, 5, 6];
 const ZSTD_LEVELS: [i32; 16] = [-7, -5, -3, -1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22];
-// LZ4: positive = `lz4_flex` fast acceleration, negative = HC level (provenance
-// only; `lz4_flex` exposes the fast block path, so the encoder ignores the value).
-const LZ4_LEVELS: [i32; 13] = [99, 64, 32, 16, 8, 4, 2, 1, -1, -3, -6, -9, -12];
+// LZ4: sign aligned with Zstandard (negative = fast) — negative = `lz4_flex` fast
+// acceleration (|level| = accel), positive = HC level. Provenance only; `lz4_flex`
+// exposes the fast block path, so the encoder ignores the value.
+const LZ4_LEVELS: [i32; 16] = [
+    -512, -256, -128, -64, -32, -16, -8, -4, -2, -1, 2, 4, 6, 9, 10, 12,
+];
 const LZAV_LEVELS: [i32; 2] = [1, 2];
 
 /// A packed codec byte: `(family << 4) | level_index`.
@@ -118,33 +121,41 @@ impl Codec {
         fn idx(table: &[i32], v: i32) -> Option<u8> {
             table.iter().position(|&x| x == v).map(|p| p as u8)
         }
+        // LZ4 spells its level `fast<n>` (negative accel) / `hc<n>` (positive HC
+        // level); every other family takes the bare nominal level integer.
+        fn parse_level(fam: CodecId, s: &str) -> Option<i32> {
+            if fam == CodecId::Lz4 {
+                if let Some(r) = s.strip_prefix("fast") {
+                    return r.parse::<i32>().ok().map(|v| -v);
+                }
+                if let Some(r) = s.strip_prefix("hc") {
+                    return r.parse().ok();
+                }
+            }
+            s.parse().ok()
+        }
         let bad = || DifError::Invalid("unknown codec variant string");
-        let (fam, real): (CodecId, i32) = match name {
-            "store" => return Ok(Codec::store()),
-            "deflate" | "libdeflate" | "deflate-6" | "libdeflate-6" => (CodecId::Deflate, 6),
-            "brotli" | "brotli-5" => (CodecId::Brotli, 5),
-            "brotli-11" => (CodecId::Brotli, 11),
-            "zstd" | "zstd-3" => (CodecId::Zstd, 3),
-            "zstd-10" => (CodecId::Zstd, 10),
-            "zstd-22" => (CodecId::Zstd, 22),
-            "lz4" | "lz4-fast1" => (CodecId::Lz4, 1),
-            "lzav" | "lzav-1" => (CodecId::Lzav, 1),
-            "zxc" | "zxc-3" => (CodecId::Zxc, 3),
-            "zxc-1" => (CodecId::Zxc, 1),
-            "zxc-2" => (CodecId::Zxc, 2),
-            "zxc-4" => (CodecId::Zxc, 4),
-            "zxc-5" => (CodecId::Zxc, 5),
-            "zxc-6" => (CodecId::Zxc, 6),
+        if name == "store" {
+            return Ok(Codec::store());
+        }
+        // `<family>` aliases its study-default level; `<family>-<level>` selects any
+        // level present in the family's table (see the per-family LEVELS arrays).
+        let (fam_str, lvl_str) = match name.split_once('-') {
+            Some((f, l)) => (f, Some(l)),
+            None => (name, None),
+        };
+        let (fam, table, default): (CodecId, &[i32], i32) = match fam_str {
+            "deflate" | "libdeflate" => (CodecId::Deflate, &DEFLATE_LEVELS, 6),
+            "brotli" => (CodecId::Brotli, &BROTLI_LEVELS, 5),
+            "zxc" => (CodecId::Zxc, &ZXC_LEVELS, 3),
+            "zstd" => (CodecId::Zstd, &ZSTD_LEVELS, 3),
+            "lz4" => (CodecId::Lz4, &LZ4_LEVELS, -1),
+            "lzav" => (CodecId::Lzav, &LZAV_LEVELS, 1),
             _ => return Err(bad()),
         };
-        let table: &[i32] = match fam {
-            CodecId::Deflate => &DEFLATE_LEVELS,
-            CodecId::Brotli => &BROTLI_LEVELS,
-            CodecId::Zxc => &ZXC_LEVELS,
-            CodecId::Zstd => &ZSTD_LEVELS,
-            CodecId::Lz4 => &LZ4_LEVELS,
-            CodecId::Lzav => &LZAV_LEVELS,
-            _ => return Err(bad()),
+        let real = match lvl_str {
+            None => default,
+            Some(l) => parse_level(fam, l).ok_or_else(bad)?,
         };
         let li = idx(table, real).ok_or_else(bad)?;
         Ok(Codec::new(fam, li))
@@ -984,7 +995,7 @@ mod tests {
         );
         assert_eq!(
             Codec::parse("lz4-fast1").unwrap(),
-            Codec::new(CodecId::Lz4, 7)
+            Codec::new(CodecId::Lz4, 9)
         );
         assert!(Codec::parse("nope").is_err());
     }

@@ -51,6 +51,60 @@ def _images(passed: list[str]) -> list[str]:
     return sorted(out)
 
 
+def _codecs(s: str) -> list[str]:
+    """Parse an lzbench `-e` codec spec into a flat list of DIF variant strings.
+
+    `/` separates codecs, `,` enumerates levels of the preceding family:
+    `family,L1,L2…` -> `family-L1`, `family-L2`, … (`brotli,5,11` -> `brotli-5`,
+    `brotli-11`; `zstd,3,22` -> `zstd-3`, `zstd-22`; `lz4,fast1,hc10` -> `lz4-fast1`,
+    `lz4-hc10`). A bare family with no comma is its default level (`zstd`, `store`).
+    `/` is never part of a codec name, so `--flag=a/b,1` parses and stays clear of
+    the `images` positional."""
+    out: list[str] = []
+    for seg in s.split("/"):
+        if not seg:
+            continue
+        family, *levels = seg.split(",")
+        if levels:
+            out.extend(f"{family}-{lvl}" for lvl in levels)
+        else:
+            out.append(family)
+    return out
+
+
+def _index_widths(s: str) -> list[str]:
+    """`/`-split index-width list (same list axis as the codec flags), validating
+    each against auto/8/16 (argparse `choices` can't pair with a list `type`)."""
+    vals = [x for x in s.split("/") if x]
+    bad = [v for v in vals if v not in ("auto", "8", "16")]
+    if bad:
+        raise argparse.ArgumentTypeError(
+            f"invalid index width(s) {bad}; choose from auto, 8, 16"
+        )
+    return vals
+
+
+def _check_codecs(parser: argparse.ArgumentParser, *specs: list[str] | None) -> None:
+    """Reject unknown codec variants up front via `dif.validate_codec` (the core
+    `Codec::parse`), so a typo errors once here instead of as a ValueError row per
+    image in the table."""
+    import dif
+
+    bad: list[str] = []
+    for spec in specs:
+        for v in spec or []:
+            try:
+                dif.validate_codec(v)
+            except ValueError:
+                if v not in bad:
+                    bad.append(v)
+    if bad:
+        parser.error(
+            f"unknown DIF codec variant(s): {', '.join(bad)} "
+            "(see --help for the family/level syntax)"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -88,36 +142,37 @@ def main(argv: list[str] | None = None) -> int:
     )
     f.add_argument(
         "--dif-codecs",
-        nargs="+",
+        type=_codecs,
         default=list(DIF_CODECS),
-        metavar="VARIANT",
-        help="outer DIF codec variants to compare (default: the study set)",
+        metavar="lzbench-spec",
+        help="outer DIF codec variants, lzbench `-e` syntax: `/` separates codecs, "
+        "`,` enumerates levels of the preceding family (default: the study set), "
+        "e.g. --dif-codecs=zstd,3/brotli,5,11/store",
     )
     f.add_argument(
         "--dif-palette-codecs",
-        nargs="+",
+        type=_codecs,
         default=None,
-        metavar="VARIANT",
-        help="palette-section codecs (default: inherit the outer codec); a list "
-        "runs the cartesian product with --dif-codecs",
+        metavar="lzbench-spec",
+        help="palette-section codecs, same `/`,`,` syntax as --dif-codecs (default: "
+        "inherit the outer codec); a list runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
         "--dif-frame-codecs",
-        nargs="+",
+        type=_codecs,
         default=None,
-        metavar="VARIANT",
-        help="frame-section codecs (default: inherit the outer codec); a list "
-        "runs the cartesian product with --dif-codecs",
+        metavar="lzbench-spec",
+        help="frame-section codecs, same `/`,`,` syntax as --dif-codecs (default: "
+        "inherit the outer codec); a list runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
         "--index-width",
-        nargs="+",
-        choices=("auto", "8", "16"),
+        type=_index_widths,
         default=["auto"],
-        metavar="WIDTH",
-        help="DIF index width(s): auto-fit (default), or force 8/16-bit (quantizes "
-        "to fit). Multiple values enumerate a dif row set per width. The resolved "
-        "width shows in each row label as -8b/-16b",
+        metavar="auto|8|16[/…]",
+        help="`/`-separated DIF index width(s): auto-fit (default), or force 8/16-bit "
+        "(quantizes to fit). Multiple values enumerate a dif row set per width. The "
+        "resolved width shows in each row label as -8b/-16b",
     )
     f.add_argument(
         "--out",
@@ -169,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
+        _check_codecs(
+            ap, args.dif_codecs, args.dif_palette_codecs, args.dif_frame_codecs
+        )
         print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
         reports: list[cmp.ImageRows] = []
         # Per-image detail streams to the console and the TSV; the report gets

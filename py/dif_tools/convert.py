@@ -134,9 +134,9 @@ def convert_file(
         data = img.to_difr()
     else:
         data = img.to_dif(
-            cast("dif.CodecName", codec),
-            cast("dif.CodecName", palette_codec),
-            cast("dif.CodecName", frame_codec),
+            codec,
+            palette_codec,
+            frame_codec,
             workers,
         )
     if output_path is not None:

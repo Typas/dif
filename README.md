@@ -178,7 +178,7 @@ roundtrip check, the only place that mt path is verified) · `--out`
 ```sh
 just bench-formats data/testdata/
 just bench-formats data/testdata/ --numthreads 4  # parallel jxl/avif/brotli + dif -mt rows
-just bench-formats img.png --dif-codecs zstd-3 brotli-11
+just bench-formats img.png --dif-codecs=zstd,3/brotli,5,11
 ```
 Renders each input (including `.drawio` → PNG once, cached) to a common raster,
 then encodes it as **PNG, lossless WebP/JXL/AVIF, GIF**, and `.dif` at several
@@ -186,9 +186,33 @@ codec variants — reporting size (relative to PNG), encode/decode MB/s, and a
 losslessness flag. PNG is the `rel` baseline; GIF and any non-lossless result are
 tagged `LOSSY`.
 
+**Choosing codecs (lzbench `-e` syntax).** `--dif-codecs` takes one string where
+`/` separates codecs and `,` enumerates levels of the preceding family — so
+`--dif-codecs=zstd,3/brotli,5,11/store` runs `zstd-3`, `brotli-5`, `brotli-11`,
+`store`. A bare family with no comma is its default level (`zstd`, `store`);
+`family,L1,L2` is that family at each level (`lz4,fast1,hc10`, `zstd,3,-7`). A
+`.dif` carries three codec bytes — outer (whole body), palette section, frame
+section — set independently:
+
+```sh
+# outer only; palette + frame inherit the outer codec (the common case)
+just bench-formats img.png --dif-codecs=zstd,3/brotli,11
+
+# pin all three sections; each flag is the same /,-syntax. Lists cross-multiply:
+#   --dif-codecs=A/B  --dif-palette-codecs=P  -> {A·P, B·P} rows
+just bench-formats img.png \
+  --dif-codecs=zstd,10 --dif-palette-codecs=store --dif-frame-codecs=zstd,10/lzav,1
+```
+
+Levels available per family (the DIF codec table): `deflate` `1…12`, `brotli`
+`0…11`, `zxc` `1…6`, `zstd` `-7,-5,-3,-1,1,2,3,6,8,10,12,14,16,18,20,22`, `lz4`
+fast `fast1…fast512` / HC `hc2…hc12`, `lzav` `1,2`, plus `store`.
+
 Options: `--repeats` (default 3) · `--numthreads N` (default 1 = a 1-core
 comparison; **>1** scales jxl/avif/brotli encode and adds `dif-{codec}-mt` rows)
-· `--dif-codecs VARIANT…` (which DIF codec variants to include) · `--out`
+· `--dif-codecs` / `--dif-palette-codecs` / `--dif-frame-codecs` (lzbench-syntax
+codec specs; palette/frame default to inheriting the outer codec) · `--index-width`
+(`/`-separated `auto`/`8`/`16`; one dif row set per width, default `auto`) · `--out`
 (`bench-formats.tsv`) · `--report` (`bench-formats.md`).
 
 > [!NOTE]

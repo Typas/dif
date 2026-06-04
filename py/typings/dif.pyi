@@ -25,34 +25,18 @@ def derive_dark_base_color(base: Rgb, strategy: Strategy) -> Rgb:
     """Derive the dark theme's base color (RGB8) from a light base color."""
     ...
 
-# The study's codec variants plus bare-family aliases (each alias resolves to its
-# study-chosen default level: zstd->3, brotli->5, deflate->6, lz4->fast1,
-# lzav->1). See crates/dif-core Codec::parse for the single source of truth.
-CodecName = Literal[
-    "store",
-    "deflate",
-    "libdeflate",
-    "deflate-6",
-    "libdeflate-6",
-    "brotli",
-    "brotli-5",
-    "brotli-11",
-    "zstd",
-    "zstd-3",
-    "zstd-10",
-    "zstd-22",
-    "lz4",
-    "lz4-fast1",
-    "lzav",
-    "lzav-1",
-    "zxc",
-    "zxc-1",
-    "zxc-2",
-    "zxc-3",
-    "zxc-4",
-    "zxc-5",
-    "zxc-6",
-]
+# Any codec variant string the core `Codec::parse` accepts: a bare family aliasing
+# its study-chosen default level (`zstd`->3, `brotli`->5, `deflate`->6, `lz4`->fast1,
+# `lzav`->1, `zxc`->3) or `family-level` for any in-table level (`zstd-3`, `zstd--7`,
+# `lz4-hc10`, `lzav-2`, `store`, …). The set is open, so this is just `str`; see
+# crates/dif-core Codec::parse for the truth, and `dif.validate_codec` to check one.
+CodecName = str
+
+def validate_codec(name: str) -> None:
+    """Validate a codec variant string against the core `Codec::parse` (the single
+    source of truth) without encoding; raises `ValueError` on an unknown variant or
+    level. Lets the benchmark reject a bad `--dif-codecs` spec before the run."""
+    ...
 
 class Image:
     @staticmethod
