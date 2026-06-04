@@ -31,7 +31,7 @@ lzav-shim = { path = "../lzav-shim", optional = true }
 # bindgen) and exposes one-shot, self-describing compress/decompress. C-linked,
 # so it's gated behind the `zxc` feature (native; wasm-native if it cross-builds).
 zxc-compress = { version = "0.11", optional = true }
-# OKLab/OKLCh color math for the encode-side dark-theme derivation (`derive`
+# OKLab/OKLCh color math for the encode-side dark-theme derivation (`encode`
 # feature). f64-generic, so it reproduces the numpy reference within rounding.
 # Encode-only — gated out of the no_std core and the wasm decoder.
 palette = { version = "0.7.6", optional = true }
@@ -56,12 +56,12 @@ brotli-mt = ["std"]
 zxc = ["std", "dep:zxc-compress"]
 # Encode-side dark-theme derivation (OKLab via `palette`). Encode-only, so it is
 # kept off the wasm decoder build to avoid pulling `palette` into the browser.
-derive = ["std", "dep:palette"]
+encode = ["std", "dep:palette"]
 # Native host build: the C codecs (incl. multithreaded zstd + brotli), libdeflate
 # encoder, zxc, and dark-theme derivation.
-native = ["c-codecs", "zstd-mt", "brotli-mt", "dep:libdeflater", "zxc", "derive"]
+native = ["c-codecs", "zstd-mt", "brotli-mt", "dep:libdeflater", "zxc", "encode"]
 # wasm decoder with the C codecs cross-compiled (decode-only, so no libdeflate
-# encoder and no `derive`). zxc is NOT here: `zxc-compress`'s file.rs uses
+# encoder and no `encode`). zxc is NOT here: `zxc-compress`'s file.rs uses
 # host-only file-descriptor calls that don't build on wasm32-wasip1, so zxc is
 # native-only and zxc `.dif`s don't decode in-browser (degraded-codec pattern).
 wasm-native = ["c-codecs"]

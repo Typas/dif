@@ -36,24 +36,40 @@ check-nostd: build
 test:
     cargo test -p dif-core
 
+# Test the core with std feature. Bare run = std under cfg(test): store / deflate / lz4.
+test-std:
+    cargo test -p dif-core --features std
+
+# Test the core with encode feature (OKLab quantize + dark-theme derivation).
+test-encode:
+    cargo test -p dif-core --features encode
+
 # `native` pulls in brotli + zstd + the libdeflate encoder + the lzav C shim.
 test-native:
     cargo test -p dif-core --features native
 
+# dif-core line coverage 
+cov: 
+    cargo llvm-cov -p dif-core
+
+# dif-core line coverage with std coverage
+cov-std: 
+    cargo llvm-cov -p dif-core --features std
+
 # dif-core line coverage (cargo-llvm-cov, native feature set so every codec is
 # exercised). First run auto-adds the llvm-tools-preview component.
-cov:
+cov-native:
     cargo llvm-cov -p dif-core --features native
 
 # Same as `cov`, but names the exact uncovered lines per file (for chasing gaps).
-cov-missing:
+cov-native-missing:
     cargo llvm-cov -p dif-core --features native --show-missing-lines
 
 # Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
 # extension suites.
 #
 # Every feature tested: core matrix + py-test + wasm-test + ext-test.
-test-all: build build-std build-native test test-native py-test wasm-test ext-test
+test-all: build build-std build-native test test-std test-encode test-native py-test wasm-test ext-test
 
 fmt:
     cargo fmt --all
@@ -62,7 +78,10 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy -p dif-core --all-features -- -D warnings
+    cargo clippy --all --all-features -- -D warnings
+
+check:
+    cargo check --all
 
 # --- Bindings (excluded from the cargo workspace) -------------------------
 

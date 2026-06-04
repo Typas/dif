@@ -15,7 +15,7 @@
 //! # Build features
 //!
 //! `no_std` + `alloc` by default (store / deflate / lz4). `std` adds Brotli;
-//! `native` adds zstd + a libdeflate encoder + the lzav C shim; `derive` adds the
+//! `native` adds zstd + a libdeflate encoder + the lzav C shim; `encode` adds the
 //! encode-side dark-theme derivation.
 
 // `no_std` for the real library build; tests need std for the libtest harness.
@@ -26,17 +26,17 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub mod codec;
-#[cfg(feature = "derive")]
+#[cfg(feature = "encode")]
 pub mod derive;
 pub mod error;
 pub mod format;
-#[cfg(feature = "derive")]
+#[cfg(feature = "encode")]
 pub mod quantize;
 
 pub use codec::{
     from_dif, from_dif_workers, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId,
 };
-#[cfg(feature = "derive")]
+#[cfg(feature = "encode")]
 pub use derive::{derive_dark_base_color, derive_dark_palette, Strategy};
 pub use error::{DifError, Result};
 
@@ -439,7 +439,7 @@ pub fn indexed_from_rgba8(
     // summed frequency and hands back `subst` (original key -> representative key)
     // for pass 2. `None` = the palette fit, so pass 2 maps keys straight through.
     // `source_colors` records the pre-quantization count only when reduced.
-    #[cfg(feature = "derive")]
+    #[cfg(feature = "encode")]
     let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) = if map.len() > capacity
     {
         (
@@ -449,12 +449,12 @@ pub fn indexed_from_rgba8(
     } else {
         (None, None)
     };
-    // Without `derive` there is no quantizer, so an overflowing palette is an error.
-    #[cfg(not(feature = "derive"))]
+    // Without `encode` there is no quantizer, so an overflowing palette is an error.
+    #[cfg(not(feature = "encode"))]
     let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) = if map.len() > capacity
     {
         return Err(DifError::Invalid(
-                "palette exceeds the index width capacity (build with the `derive` feature to quantize)",
+                "palette exceeds the index width capacity (build with the `encode` feature to quantize)",
             ));
     } else {
         (None, None)
@@ -628,7 +628,7 @@ mod tests {
         rgba
     }
 
-    #[cfg(feature = "derive")]
+    #[cfg(feature = "encode")]
     #[test]
     fn quantize_forced_8bit_reduces_deterministically() {
         let side = 20; // 400 distinct colors -> must fold into <= 256
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(q, q2);
     }
 
-    #[cfg(feature = "derive")]
+    #[cfg(feature = "encode")]
     #[test]
     fn forced_16bit_keeps_all_colors_without_quantizing() {
         let side = 20; // 400 distinct colors all fit 16-bit
