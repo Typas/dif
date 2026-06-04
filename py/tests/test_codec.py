@@ -99,6 +99,26 @@ def test_multiframe_delays_and_replay():
     assert list(f1[0:4]) == [40, 50, 60, 255]
 
 
+def test_multiframe_threads_match_serial():
+    # 8 frames, inter-frame parallel encode/decode (workers>1) must match serial.
+    frames = [[i % 2, (i + 1) % 2] for i in range(8)]
+    img = dif.Image.indexed(
+        2,
+        1,
+        8,
+        [_LIGHT_THEME],
+        [[(10, 20, 30, 255), (40, 50, 60, 255)]],
+        frames,
+    )
+    serial = img.to_dif("store", "store", "zstd-3", 0)
+    parallel = img.to_dif("store", "store", "zstd-3", 8)
+    assert serial == parallel
+    back = dif.Image.from_dif(parallel, 8)
+    assert back.frame_count == 8
+    _, _, f3 = back.render("light", (255, 255, 255), 3)
+    assert list(f3[0:4]) == [40, 50, 60, 255]
+
+
 def test_theme_fallback_to_first():
     # Only a light theme present; asking for dark falls back to theme 0.
     img = dif.Image.indexed(1, 1, 8, [_LIGHT_THEME], [[(1, 2, 3, 255)]], [[0]])

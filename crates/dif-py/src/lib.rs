@@ -7,8 +7,8 @@
 //! each frame with their own codec under an outer pass.
 
 use dif_core::{
-    abilities, from_dif, from_difr, indexed_from_rgba8, to_dif_workers, to_difr, Codec, ColorDepth,
-    DifError, DifImage, Frame, IndexWidth, Rgba, Strategy, Theme, ThemeTag,
+    abilities, from_dif_workers, from_difr, indexed_from_rgba8, to_dif_workers, to_difr, Codec,
+    ColorDepth, DifError, DifImage, Frame, IndexWidth, Rgba, Strategy, Theme, ThemeTag,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -244,11 +244,13 @@ impl Image {
         Ok((self.inner.width, self.inner.height, PyBytes::new(py, &buf)))
     }
 
-    /// Decode a `.dif` container.
+    /// Decode a `.dif` container. `workers` > 1 decodes frames in parallel
+    /// (opt-in; default serial). The result is identical regardless of count.
     #[staticmethod]
-    fn from_dif(data: &[u8]) -> PyResult<Image> {
+    #[pyo3(signature = (data, workers=1))]
+    fn from_dif(data: &[u8], workers: u32) -> PyResult<Image> {
         Ok(Image {
-            inner: from_dif(data).map_err(map_err)?,
+            inner: from_dif_workers(data, workers).map_err(map_err)?,
             source_colors: None,
         })
     }

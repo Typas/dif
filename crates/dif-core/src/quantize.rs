@@ -39,7 +39,8 @@ struct Item {
 /// `u32::from_le_bytes([r, g, b, a])`) into its OKLab+alpha coordinate.
 fn coord_of(key: u32) -> [f64; 4] {
     let [r, g, b, a] = key.to_le_bytes();
-    let lab: Oklab<f64> = Srgb::new(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0).into_color();
+    let lab: Oklab<f64> =
+        Srgb::new(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0).into_color();
     [lab.l, lab.a, lab.b, a as f64 / 255.0 * ALPHA_WEIGHT]
 }
 
@@ -50,8 +51,8 @@ fn representative(items: &[Item], idxs: &[usize]) -> u32 {
     let mut w = 0.0f64;
     for &i in idxs {
         let f = items[i].freq as f64;
-        for c in 0..4 {
-            sum[c] += items[i].coord[c] * f;
+        for (s, &cv) in sum.iter_mut().zip(&items[i].coord) {
+            *s += cv * f;
         }
         w += f;
     }
@@ -61,17 +62,21 @@ fn representative(items: &[Item], idxs: &[usize]) -> u32 {
     let srgb: Srgb<f64> = Oklab::new(sum[0], sum[1], sum[2]).into_color();
     let enc = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let a = (sum[3] / ALPHA_WEIGHT).clamp(0.0, 1.0) * 255.0;
-    u32::from_le_bytes([enc(srgb.red), enc(srgb.green), enc(srgb.blue), a.round() as u8])
+    u32::from_le_bytes([
+        enc(srgb.red),
+        enc(srgb.green),
+        enc(srgb.blue),
+        a.round() as u8,
+    ])
 }
 
 /// Per-axis `(min, max)` extent of a box.
 fn extents(items: &[Item], idxs: &[usize]) -> [(f64, f64); 4] {
     let mut ext = [(f64::INFINITY, f64::NEG_INFINITY); 4];
     for &i in idxs {
-        for c in 0..4 {
-            let v = items[i].coord[c];
-            ext[c].0 = ext[c].0.min(v);
-            ext[c].1 = ext[c].1.max(v);
+        for (e, &v) in ext.iter_mut().zip(&items[i].coord) {
+            e.0 = e.0.min(v);
+            e.1 = e.1.max(v);
         }
     }
     ext
@@ -95,7 +100,12 @@ impl HeapBox {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap();
         let min_key = idxs.iter().map(|&i| items[i].key).min().unwrap();
-        HeapBox { range_bits: range.to_bits(), min_key, axis, idxs }
+        HeapBox {
+            range_bits: range.to_bits(),
+            min_key,
+            axis,
+            idxs,
+        }
     }
     /// Splittable only if it holds >= 2 colors spread over a non-zero range.
     fn splittable(&self) -> bool {
@@ -155,7 +165,11 @@ fn split(items: &[Item], mut b: HeapBox) -> (HeapBox, HeapBox) {
 pub fn quantize_oklab(counts: &mut FxHashMap<u32, u32>, capacity: usize) -> FxHashMap<u32, u32> {
     let items: Vec<Item> = counts
         .iter()
-        .map(|(&key, &freq)| Item { key, freq, coord: coord_of(key) })
+        .map(|(&key, &freq)| Item {
+            key,
+            freq,
+            coord: coord_of(key),
+        })
         .collect();
 
     // Median-cut: pop the widest box, split it, until we have `capacity` boxes (or

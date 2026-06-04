@@ -45,6 +45,10 @@ test-native:
 cov:
     cargo llvm-cov -p dif-core --features native
 
+# Same as `cov`, but names the exact uncovered lines per file (for chasing gaps).
+cov-missing:
+    cargo llvm-cov -p dif-core --features native --show-missing-lines
+
 # Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
 # extension suites.
 #

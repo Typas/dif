@@ -117,6 +117,7 @@ def convert_file(
     frame_codec: str = "store",
     raw: bool = False,
     index_width: str = "auto",
+    workers: int = 1,
 ) -> bytes:
     """Convert an image to ``.dif`` (or ``.difr`` if ``raw``); returns the bytes.
 
@@ -125,6 +126,8 @@ def convert_file(
     random-access layout). Each is one of the study's variant strings (e.g.
     ``"zstd-3"``, ``"brotli-11"``, ``"lz4-fast1"``); see :data:`dif.CodecName`.
     ``index_width`` is ``"auto"``/``"8"``/``"16"`` (see :func:`dif_image_from_array`).
+    ``workers`` > 1 spreads frame compression across threads (inter-frame parallel,
+    in-frame split only when frames < workers); default 1 keeps it serial.
     """
     img = image_to_dif_image(input_path, strategy=strategy, index_width=index_width)
     if raw:
@@ -134,6 +137,7 @@ def convert_file(
             cast("dif.CodecName", codec),
             cast("dif.CodecName", palette_codec),
             cast("dif.CodecName", frame_codec),
+            workers,
         )
     if output_path is not None:
         Path(output_path).write_bytes(data)

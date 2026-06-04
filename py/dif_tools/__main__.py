@@ -45,7 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         "--codec",
         choices=_CODECS,
         default="zstd-3",
-        help="outer whole-body codec for .dif (default: zstd-3)",
+        help=(
+            "outer whole-body codec for .dif (default: zstd-3); prefer 'store' for "
+            "multi-frame so frames stay seekable for low-memory parallel decode"
+        ),
     )
     conv.add_argument(
         "--palette-codec",
@@ -68,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         help="palette index width: auto-fit, or force 8/16-bit (quantizes to fit)",
     )
+    conv.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="encode worker threads (default: 1 serial; >1 = inter-frame parallel)",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "convert":
@@ -80,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             frame_codec=args.frame_codec,
             raw=args.raw,
             index_width=args.index_width,
+            workers=args.threads,
         )
         print(f"wrote {args.output} ({len(data)} bytes)")
     return 0

@@ -33,7 +33,9 @@ pub mod format;
 #[cfg(feature = "derive")]
 pub mod quantize;
 
-pub use codec::{from_dif, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId};
+pub use codec::{
+    from_dif, from_dif_workers, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId,
+};
 #[cfg(feature = "derive")]
 pub use derive::{derive_dark_base_color, derive_dark_palette, Strategy};
 pub use error::{DifError, Result};
@@ -438,22 +440,25 @@ pub fn indexed_from_rgba8(
     // for pass 2. `None` = the palette fit, so pass 2 maps keys straight through.
     // `source_colors` records the pre-quantization count only when reduced.
     #[cfg(feature = "derive")]
-    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) =
-        if map.len() > capacity {
-            (Some(quantize::quantize_oklab(&mut map, capacity)), Some(source))
-        } else {
-            (None, None)
-        };
+    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) = if map.len() > capacity
+    {
+        (
+            Some(quantize::quantize_oklab(&mut map, capacity)),
+            Some(source),
+        )
+    } else {
+        (None, None)
+    };
     // Without `derive` there is no quantizer, so an overflowing palette is an error.
     #[cfg(not(feature = "derive"))]
-    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) =
-        if map.len() > capacity {
-            return Err(DifError::Invalid(
+    let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) = if map.len() > capacity
+    {
+        return Err(DifError::Invalid(
                 "palette exceeds the index width capacity (build with the `derive` feature to quantize)",
             ));
-        } else {
-            (None, None)
-        };
+    } else {
+        (None, None)
+    };
 
     // Order by frequency (desc), tie-break by key (asc) for determinism. After
     // quantization `map` holds the representative colors, so this orders those.
@@ -628,16 +633,17 @@ mod tests {
     fn quantize_forced_8bit_reduces_deterministically() {
         let side = 20; // 400 distinct colors -> must fold into <= 256
         let rgba = distinct_colors(side);
-        let (img, q) =
-            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
+        let (img, q) = indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
         assert_eq!(img.index_width, IndexWidth::Bit8);
         assert!(img.palettes[0].len() <= 256, "palette must fit 8-bit");
         assert_eq!(q, Some(400), "reports pre-quantization color count");
         // Every emitted index is in range (also asserted by `validate`).
-        assert!(img.frames[0].indices.iter().all(|&i| (i as usize) < img.palettes[0].len()));
+        assert!(img.frames[0]
+            .indices
+            .iter()
+            .all(|&i| (i as usize) < img.palettes[0].len()));
         // Deterministic: same bytes + same metadata on a second run.
-        let (img2, q2) =
-            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
+        let (img2, q2) = indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
         assert_eq!(to_difr(&img).unwrap(), to_difr(&img2).unwrap());
         assert_eq!(q, q2);
     }
@@ -647,8 +653,7 @@ mod tests {
     fn forced_16bit_keeps_all_colors_without_quantizing() {
         let side = 20; // 400 distinct colors all fit 16-bit
         let rgba = distinct_colors(side);
-        let (img, q) =
-            indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit16)).unwrap();
+        let (img, q) = indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit16)).unwrap();
         assert_eq!(img.index_width, IndexWidth::Bit16);
         assert_eq!(img.palettes[0].len(), 400);
         assert_eq!(q, None, "fit losslessly, so not quantized");

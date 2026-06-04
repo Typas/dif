@@ -19,7 +19,13 @@ use alloc::vec::Vec;
 
 use crate::error::{DifError, Result};
 use crate::format::{self, align16, Header, HEADER_LEN};
-use crate::{DifImage, Frame};
+use crate::{DifImage, Frame, IndexWidth};
+
+/// Default in-frame split job size (`J`): the controlled per-job byte target the
+/// scheduler hands zstd, overriding its ~1 MB internal floor so multi-MB frames
+/// stay few, big jobs (keeps cross-job matches, bounds the ratio tax). Only used
+/// when `frame_count < workers` forces an in-frame split.
+const DEFAULT_FRAME_JOB_SIZE: usize = 4 << 20; // 4 MiB
 
 /// On-disk codec **family** (the high nibble of a codec byte).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -162,7 +168,7 @@ fn compress(method: Method, level: i32, data: &[u8], workers: u32) -> Result<Vec
         Method::Store => Ok(data.to_vec()),
         Method::Deflate => deflate_compress(data, level),
         Method::Brotli => brotli_compress(data, level.clamp(0, 11) as u8, workers),
-        Method::Zstd => zstd_compress(data, level, workers),
+        Method::Zstd => zstd_compress(data, level, workers, None),
         Method::Lz4 => Ok(lz4_flex::block::compress(data)),
         Method::Lzav => lzav_compress(data),
         Method::Zxc => zxc_compress(data, level),
@@ -358,7 +364,7 @@ fn brotli_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
 
 #[cfg(feature = "c-codecs")]
 #[cfg_attr(not(feature = "zstd-mt"), allow(unused_variables))]
-fn zstd_compress(data: &[u8], level: i32, workers: u32) -> Result<Vec<u8>> {
+fn zstd_compress(data: &[u8], level: i32, workers: u32, job_size: Option<u32>) -> Result<Vec<u8>> {
     #[cfg(feature = "zstd-mt")]
     if workers > 0 {
         use zstd_safe::{CCtx, CParameter};
@@ -367,6 +373,14 @@ fn zstd_compress(data: &[u8], level: i32, workers: u32) -> Result<Vec<u8>> {
             .map_err(|_| DifError::CompressionFailed)?;
         cctx.set_parameter(CParameter::NbWorkers(workers))
             .map_err(|_| DifError::CompressionFailed)?;
+        // `J`: the scheduler-chosen per-job size; overrides zstd's ~1 MB floor so
+        // the in-frame split is the controlled, ratio-bounded one.
+        if let Some(js) = job_size {
+            if js > 0 {
+                cctx.set_parameter(CParameter::JobSize(js))
+                    .map_err(|_| DifError::CompressionFailed)?;
+            }
+        }
         let mut out = alloc::vec![0u8; zstd_safe::compress_bound(data.len())];
         let n = cctx
             .compress2(out.as_mut_slice(), data)
@@ -391,13 +405,137 @@ fn zstd_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "c-codecs"))]
-fn zstd_compress(_data: &[u8], _level: i32, _workers: u32) -> Result<Vec<u8>> {
+fn zstd_compress(
+    _data: &[u8],
+    _level: i32,
+    _workers: u32,
+    _job_size: Option<u32>,
+) -> Result<Vec<u8>> {
     Err(DifError::Invalid("zstd codec requires a C-codec feature"))
 }
 
 #[cfg(not(feature = "c-codecs"))]
 fn zstd_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("zstd codec requires a C-codec feature"))
+}
+
+// --- frame parallelism ----------------------------------------------------
+
+/// Run `f` over `0..n`, returning results indexed by `i`. With `threads >= 2`
+/// and the `std` feature, a bounded pool of `min(threads, n)` scoped workers
+/// pulls indices off a shared atomic counter (work-stealing-lite); output order
+/// is by index, so the bytes are identical to the serial path regardless of how
+/// many threads ran. Without `std`, or with `threads < 2`, it is a plain loop.
+#[cfg(feature = "std")]
+fn parallel_map<T, F>(n: usize, threads: usize, f: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync,
+{
+    if threads < 2 || n < 2 {
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            out.push(f(i)?);
+        }
+        return Ok(out);
+    }
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let counter = AtomicUsize::new(0);
+    let counter = &counter;
+    let f = &f;
+    let nthreads = threads.min(n);
+    let partials: Vec<Result<Vec<(usize, T)>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..nthreads)
+            .map(|_| {
+                s.spawn(move || {
+                    let mut local: Vec<(usize, T)> = Vec::new();
+                    loop {
+                        let i = counter.fetch_add(1, Ordering::Relaxed);
+                        if i >= n {
+                            break;
+                        }
+                        local.push((i, f(i)?));
+                    }
+                    Ok(local)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(Err(DifError::CompressionFailed)))
+            .collect()
+    });
+    let mut slots: Vec<Option<T>> = Vec::with_capacity(n);
+    slots.resize_with(n, || None);
+    for part in partials {
+        for (i, v) in part? {
+            slots[i] = Some(v);
+        }
+    }
+    let mut out = Vec::with_capacity(n);
+    for slot in slots {
+        out.push(slot.ok_or(DifError::CompressionFailed)?);
+    }
+    Ok(out)
+}
+
+#[cfg(not(feature = "std"))]
+fn parallel_map<T, F>(n: usize, _threads: usize, f: F) -> Result<Vec<T>>
+where
+    F: Fn(usize) -> Result<T>,
+{
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        out.push(f(i)?);
+    }
+    Ok(out)
+}
+
+/// Compress one frame's index-plane bytes. `workers` is the in-frame split factor
+/// `k`: `0`/`1` means a single serial job (pure inter-frame), `> 1` asks the codec
+/// for a `k`-way single-blob native-MT split. Only zstd (`JobSize = J`) and brotli
+/// (`level >= 10`, parallel meta-blocks) honor `k > 1`; every other family ignores
+/// it and stays one job.
+fn compress_frame(codec: Codec, raw: &[u8], workers: u32, job_size: u32) -> Result<Vec<u8>> {
+    let (method, level) = codec.resolve()?;
+    match method {
+        Method::Zstd => zstd_compress(raw, level, workers, Some(job_size)),
+        _ => compress(method, level, raw, workers),
+    }
+}
+
+/// Compress every frame's index plane, returning blobs indexed by frame.
+///
+/// `frame_count >= workers`: pure inter-frame — `min(workers, n)` threads, each
+/// frame compressed serially (`k = 1`), zero ratio loss. `frame_count < workers`:
+/// too few frames to fill the pool, so each frame is split `k`-ways
+/// (`k = min(ceil(T/n), floor(S/J))`, capped by family eligibility inside
+/// [`compress_frame`]), one thread per frame, so live threads ≈ `n * k ≈ T`.
+fn compress_frames(
+    frames: &[Frame],
+    iw: IndexWidth,
+    codec: Codec,
+    workers: u32,
+    job_size: usize,
+) -> Result<Vec<Vec<u8>>> {
+    let n = frames.len();
+    let t = (workers.max(1) as usize).max(1);
+    let (per_frame_k, pool_threads) = if n == 0 || n >= t {
+        (0u32, t) // pure inter-frame; each codec runs single-threaded
+    } else {
+        // Few frames: split each across the spare threads.
+        let s = frames.iter().map(|f| f.indices.len()).max().unwrap_or(0) * iw.bytes();
+        let by_threads = t.div_ceil(n); // ceil(T / n)
+        let by_size = (s / job_size.max(1)).max(1); // floor(S / J), >= 1
+        let k = by_threads.min(by_size).max(1) as u32;
+        (k, n)
+    };
+    let js = job_size.min(u32::MAX as usize) as u32;
+    parallel_map(n, pool_threads, |j| {
+        let mut raw_bm: Vec<u8> = Vec::new();
+        format::frame_bitmap_bytes(&frames[j].indices, iw, &mut raw_bm);
+        compress_frame(codec, &raw_bm, per_frame_k, js)
+    })
 }
 
 // --- container assembly ---------------------------------------------------
@@ -429,13 +567,9 @@ fn encode(
     pad_to_16(&mut mid);
     let first_frame_start = mid.len();
 
-    // Compress each frame, then pick a uniform 16-aligned stride.
-    let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(img.frames.len());
-    for f in &img.frames {
-        let mut raw_bm: Vec<u8> = Vec::new();
-        format::frame_bitmap_bytes(&f.indices, iw, &mut raw_bm);
-        blobs.push(compress_section(frame, &raw_bm, workers)?);
-    }
+    // Compress each frame (inter-frame parallel; in-frame split only when there
+    // are too few frames to fill the pool), then pick a uniform 16-aligned stride.
+    let blobs = compress_frames(&img.frames, iw, frame, workers, DEFAULT_FRAME_JOB_SIZE)?;
     let alignment = blobs
         .iter()
         .map(|b| align16(12 + b.len()))
@@ -476,7 +610,7 @@ fn encode(
     Ok(out)
 }
 
-fn decode(bytes: &[u8]) -> Result<DifImage> {
+fn decode(bytes: &[u8], workers: u32) -> Result<DifImage> {
     let h = Header::read(bytes)?;
     let depth = h.color_depth()?;
     let iw = h.index_width()?;
@@ -525,9 +659,11 @@ fn decode(bytes: &[u8]) -> Result<DifImage> {
     let raw_pal = decompress_section(Codec(h.codec_palette), pal_blob, raw_pal_len)?;
     let palettes = format::read_palettes(&raw_pal, t, cc, depth)?;
 
-    let mut frames = Vec::with_capacity(h.frame_count);
+    // Frames are independent streams at known offsets, so decode them in parallel
+    // over the (already materialized, immutably shared) intermediate body.
     let bm_len = px * iw.bytes();
-    for j in 0..h.frame_count {
+    let mid = &mid;
+    let frames = parallel_map(h.frame_count, workers.max(1) as usize, |j| {
         let fstart = first_frame_internal + j * alignment;
         if fstart + 12 > mid.len() {
             return Err(DifError::UnexpectedEof);
@@ -540,11 +676,11 @@ fn decode(bytes: &[u8]) -> Result<DifImage> {
         let blob = &mid[fstart + 12..fstart + size];
         let raw_bm = decompress_section(Codec(h.codec_frame), blob, bm_len)?;
         let indices = format::read_frame_bitmap(&raw_bm, px, iw)?;
-        frames.push(Frame {
+        Ok(Frame {
             delay_us: delay,
             indices,
-        });
-    }
+        })
+    })?;
 
     let img = DifImage {
         width: h.width,
@@ -588,13 +724,19 @@ pub fn to_difr(img: &DifImage) -> Result<Vec<u8>> {
     encode(img, true, Codec::store(), Codec::store(), Codec::store(), 0)
 }
 
-/// Parse and decompress a `.dif` container.
+/// Parse and decompress a `.dif` container (single-thread).
 pub fn from_dif(bytes: &[u8]) -> Result<DifImage> {
+    from_dif_workers(bytes, 1)
+}
+
+/// Like [`from_dif`], but `workers` > 1 decodes frames in parallel (opt-in; the
+/// default stays serial). The result is identical regardless of worker count.
+pub fn from_dif_workers(bytes: &[u8], workers: u32) -> Result<DifImage> {
     let h = Header::read(bytes)?;
     if h.is_raw {
         return Err(DifError::BadMagic(format::MAGIC_DIFR));
     }
-    decode(bytes)
+    decode(bytes, workers)
 }
 
 /// Parse a raw `.difr` container.
@@ -603,7 +745,7 @@ pub fn from_difr(bytes: &[u8]) -> Result<DifImage> {
     if !h.is_raw {
         return Err(DifError::BadMagic(format::MAGIC_DIF));
     }
-    decode(bytes)
+    decode(bytes, 1)
 }
 
 #[cfg(test)]
@@ -705,6 +847,115 @@ mod tests {
         assert_eq!(img, back);
         assert_eq!(back.frames[1].delay_us, 200);
         assert_eq!(back.replay_count, 0);
+    }
+
+    // A square `n`-frame image; each frame is a 0/1 index plane (palette has 2
+    // colors) so it stays valid at any side length.
+    #[cfg(feature = "std")]
+    fn multi(n: usize, side: u32) -> DifImage {
+        let mut img = sample(ColorDepth::Rgba8, IndexWidth::Bit8);
+        img.width = side;
+        img.height = side;
+        let px = (side * side) as usize;
+        img.frames = (0..n)
+            .map(|f| Frame {
+                delay_us: (f as u32) * 10,
+                indices: (0..px).map(|i| ((i + f) % 2) as u64).collect(),
+            })
+            .collect();
+        img
+    }
+
+    // frame_count >= workers => k=1 pure inter-frame: parallel must be
+    // byte-identical to serial on both encode and decode.
+    #[test]
+    #[cfg(feature = "std")]
+    fn parallel_matches_serial_encode_and_decode() {
+        let img = multi(8, 4);
+        let frame_codec = if cfg!(feature = "native") {
+            Codec::parse("zstd-3").unwrap()
+        } else {
+            Codec::store()
+        };
+        let serial = to_dif_workers(&img, Codec::store(), Codec::store(), frame_codec, 0).unwrap();
+        let parallel =
+            to_dif_workers(&img, Codec::store(), Codec::store(), frame_codec, 8).unwrap();
+        assert_eq!(serial, parallel, "k=1 inter-frame must equal serial bytes");
+        let a = from_dif(&serial).unwrap();
+        let b = from_dif_workers(&serial, 8).unwrap();
+        assert_eq!(a, b, "parallel decode must equal serial decode");
+        assert_eq!(img, b);
+    }
+
+    // frame_count < workers + small J forces k>1; the split must still yield one
+    // decodable blob per frame (zstd JobSize path).
+    #[test]
+    #[cfg(feature = "native")]
+    fn in_frame_split_zstd_blob_roundtrips() {
+        let img = multi(2, 32);
+        let iw = img.index_width;
+        let zstd = Codec::parse("zstd-3").unwrap();
+        let blobs = compress_frames(&img.frames, iw, zstd, 8, 256).unwrap();
+        assert_eq!(blobs.len(), 2);
+        let px = (img.width * img.height) as usize;
+        for (f, blob) in img.frames.iter().zip(&blobs) {
+            let raw = decompress_section(zstd, blob, px * iw.bytes()).unwrap();
+            let idx = format::read_frame_bitmap(&raw, px, iw).unwrap();
+            assert_eq!(&idx, &f.indices, "split zstd frame must roundtrip");
+        }
+    }
+
+    // Brotli at level >= 10 is the second single-blob-MT family: split via
+    // compress_multi, one decodable stream per frame.
+    #[test]
+    #[cfg(feature = "native")]
+    fn in_frame_split_brotli_blob_roundtrips() {
+        let img = multi(2, 32);
+        let iw = img.index_width;
+        let br = Codec::parse("brotli-11").unwrap();
+        let blobs = compress_frames(&img.frames, iw, br, 8, 256).unwrap();
+        let px = (img.width * img.height) as usize;
+        for (f, blob) in img.frames.iter().zip(&blobs) {
+            let raw = decompress_section(br, blob, px * iw.bytes()).unwrap();
+            let idx = format::read_frame_bitmap(&raw, px, iw).unwrap();
+            assert_eq!(&idx, &f.indices, "split brotli frame must roundtrip");
+        }
+    }
+
+    // Non-MT families (and brotli < 10) ignore k>1 and stay one job; under thread
+    // pressure (frame_count < workers) they must still roundtrip end to end.
+    #[test]
+    #[cfg(feature = "native")]
+    fn no_split_codecs_roundtrip_under_thread_pressure() {
+        let img = multi(2, 8);
+        for name in ["lz4", "lzav-1", "deflate", "zxc-3", "brotli-5"] {
+            let c = Codec::parse(name).unwrap();
+            let bytes = to_dif_workers(&img, Codec::store(), Codec::store(), c, 8).unwrap();
+            let back = from_dif_workers(&bytes, 8).unwrap();
+            assert_eq!(img, back, "codec {name} under thread pressure");
+        }
+    }
+
+    // A corrupt frame-record size must be rejected on both the serial and the
+    // parallel decode path (and the error must propagate out of the pool).
+    #[test]
+    #[cfg(feature = "std")]
+    fn decode_rejects_corrupt_frame_record() {
+        let img = multi(3, 4);
+        // Store outer keeps the file body == intermediate body, so the record's
+        // size field is directly pokeable in the output bytes.
+        let mut bytes =
+            to_dif_workers(&img, Codec::store(), Codec::store(), Codec::store(), 0).unwrap();
+        let h = Header::read(&bytes).unwrap();
+        // File offset of frame 1's u64 size field = first_frame_offset + alignment.
+        let rec1 = h.first_frame_offset as usize + h.frame_alignment as usize;
+        let bogus = (bytes.len() as u64 + 64).to_le_bytes(); // size past end of body
+        bytes[rec1..rec1 + 8].copy_from_slice(&bogus);
+        assert!(from_dif(&bytes).is_err(), "serial decode must reject");
+        assert!(
+            from_dif_workers(&bytes, 4).is_err(),
+            "parallel decode must reject and propagate"
+        );
     }
 
     #[test]
