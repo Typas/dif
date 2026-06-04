@@ -87,7 +87,13 @@ check:
 
 # Build the Python extension into the uv 3.12 env.
 # `dev-release` = optimized + debug info, so benchmark timings are realistic.
+# patchelf (a uv dev dep) lets maturin's rpath patch succeed and silences the
+# rpath warning. The `rm -rf target/maturin` fixes reruns: on a cached rebuild
+# maturin re-populates its staging copy over the prior one and collapses the
+# cdylib's hardlinks to a 0-byte inode, so the next parse fails with "Object is
+# too small". Wiping the staging dir first gives maturin a clean slate.
 py:
+    rm -rf target/maturin
     uv run maturin develop --profile dev-release -m crates/dif-py/Cargo.toml
 
 # Target is wasm32-wasip1 so wasi-libc provides malloc + the C headers the codec
