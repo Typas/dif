@@ -1,4 +1,6 @@
-### drawio/  (M aggregated over images beneath)| codec | n | ratio S | C | D | M mean | M std | note |
+### drawio/  (M aggregated over images beneath)
+
+| codec | n | ratio S | C | D | M mean | M std | note |
 |---|--:|--:|--:|--:|--:|--:|---|
 | zstd-3 | 64 | 26.293 | 23.2 | 9.1 | 8.519 | 3.399 |  |
 | lzav-1 | 64 | 20.262 | 14.3 | 5.3 | 8.335 | 3.165 |  |
