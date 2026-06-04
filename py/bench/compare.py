@@ -307,7 +307,7 @@ def _ref_size(rows: list[FormatResult]) -> int | None:
 
 # Fixed-width pipe-table layout matching bench/runner.py's `bench_image` console
 # output. Shared by the live stream and the final table so the two are identical.
-_FMT_W = 16
+_FMT_W = 25
 _SIZE_W = 10
 _SPD_W = 12
 _REL_W = 6
