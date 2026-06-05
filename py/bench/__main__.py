@@ -204,12 +204,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "setup":
+        # Sources are git submodules; if a build fails, `git submodule update --init`.
         lz = native.build_lzav()
-        print("lzav shim:", "built" if lz else "FAILED (needs cc + network)")
+        print("lzav shim:", "built" if lz else "FAILED (needs cc + submodule)")
         kz = native.build_kanzi()
-        print("kanzi shim:", "built" if kz else "FAILED (needs cargo + git + network)")
+        print("kanzi shim:", "built" if kz else "FAILED (needs cargo + submodule)")
         bs = native.build_libbsc()
-        print("libbsc shim:", "built" if bs else "FAILED (needs cc + c++ compiler)")
+        print("libbsc shim:", "built" if bs else "FAILED (needs cc + c++ + submodule)")
         return 0
 
     imgs = _images(args.images)

@@ -44,5 +44,4 @@ bench-formats.md
 bench-formats-*.md
 py/bench/results/
 py/bench/_native/
-crates/kanzi-shim/vendor/
 crates/kanzi-shim/Cargo.lock

@@ -241,10 +241,11 @@ ci: test-all spec
 # touches system pip. Leaves tracked sources (web/extension/media/viewer.js) and
 # deps (node_modules).
 # Remove build artifacts: cargo target, staged wasm + TS output, dist, py caches,
-# bench scratch, dif module.
+# bench native shims, dif module. Keeps all benchmark records (bench-*.md/.tsv).
 clean:
     cargo clean
     -uv pip uninstall dif
     rm -rf web/extension/media/pkg web/extension/out .pytest_cache dist
     rm -rf py/dif_tools/__pycache__ py/bench/__pycache__ py/tests/__pycache__
-    rm -f web/extension/media/wasi_shim.js bench-report.md bench-codecs.tsv
+    rm -rf py/bench/_native
+    rm -f web/extension/media/wasi_shim.js *.vsix

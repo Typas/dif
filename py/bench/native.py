@@ -1,15 +1,18 @@
 """Optional native codecs that have no PyPI wheel: lzav, kanzi and libbsc.
 
-All are exposed to the benchmark as ``ctypes``-loaded C-ABI shared libraries.
+All are exposed to the benchmark as ``ctypes``-loaded C-ABI shared libraries, and
+all source from git submodules (``git submodule update --init`` first; no network
+at build).
 
-- **lzav**: a single public-domain header. :func:`build_lzav` fetches it and
-  compiles a tiny shim into ``bench/_native``.
-- **kanzi**: adapted from kanzi-cpp via the Rust crate ``crates/kanzi-shim``
-  (a cdylib wrapping kanzi's C API). :func:`build_kanzi` vendors kanzi-cpp and
-  ``cargo build``s the shim; levels 1 and 2 are exposed.
-- **libbsc** (DIF family 3): the vendored C/C++ sources + extern-"C" wrapper
-  already used by ``dif-core``'s ``bsc`` codec (``crates/libbsc-shim``).
-  :func:`build_libbsc` compiles them into a ``.so`` (no network); levels 1–3.
+- **lzav**: a single public-domain header from the ``crates/lzav-shim/vendor/lzav``
+  submodule (shared with dif-core's family-6 codec). :func:`build_lzav` compiles a
+  tiny shim into ``bench/_native``.
+- **kanzi**: adapted from kanzi-cpp via the Rust crate ``crates/kanzi-shim`` (a
+  cdylib wrapping kanzi's C API), sources from its ``vendor/kanzi-cpp`` submodule.
+  :func:`build_kanzi` ``cargo build``s the shim; levels 1 and 2 are exposed.
+- **libbsc** (DIF family 3): the C/C++ sources + extern-"C" wrapper used by
+  ``dif-core``'s ``bsc`` codec (the ``crates/libbsc-shim`` submodule).
+  :func:`build_libbsc` compiles them into a ``.so``; levels 1–3.
 
 Run ``python -m bench setup`` to build them.
 """
@@ -20,7 +23,6 @@ import ctypes
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,12 +31,16 @@ if TYPE_CHECKING:
 
 _ROOT = Path(__file__).parent.parent.parent
 _NATIVE_DIR = Path(__file__).parent / "_native"
-_LZAV_HEADER_URL = "https://raw.githubusercontent.com/avaneev/lzav/master/lzav.h"
+# lzav.h comes from the crates/lzav-shim/vendor/lzav git submodule (shared with
+# dif-core's family-6 codec), not a download.
+_LZAV_VENDOR = _ROOT / "crates/lzav-shim/vendor/lzav"
 _LZAV_SO = _NATIVE_DIR / "liblzavshim.so"
 
 _KANZI_DIR = _ROOT / "crates/kanzi-shim"
-_KANZI_SO = _KANZI_DIR / "target/release/libkanzi_shim.so"
-_KANZI_REPO = "https://github.com/flanglet/kanzi-cpp"
+# `.cargo/config.toml` redirects every build (incl. excluded shim crates) to the
+# repo-root target/, so kanzi-shim's cdylib lands there, not under its own crate.
+_KANZI_SO = _ROOT / "target/release/libkanzi_shim.so"
+# kanzi-cpp sources come from the crates/kanzi-shim/vendor/kanzi-cpp git submodule.
 _KANZI_VENDOR = _KANZI_DIR / "vendor/kanzi-cpp"
 
 # libbsc (family 3): reuse the C/C++ sources + extern-"C" wrapper that dif-core's
@@ -71,19 +77,17 @@ int shim_decompress(const void* s, void* d, int sl, int dl){ return lzav_decompr
 
 
 def build_lzav() -> bool:  # pragma: no cover
-    """Fetch lzav.h and compile the shim. Returns True on success.
+    """Compile the lzav shim from the vendored submodule header. True on success.
 
-    No-cover: needs network + a C compiler; exercised by ``just bench-setup``.
+    No-cover: needs a C compiler; exercised by ``just bench-setup``.
     """
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if cc is None:
         return False
+    if not (_LZAV_VENDOR / "lzav.h").exists():  # submodule not initialized
+        return False
     _NATIVE_DIR.mkdir(exist_ok=True)
-    header = _NATIVE_DIR / "lzav.h"
     try:
-        if not header.exists():
-            with urllib.request.urlopen(_LZAV_HEADER_URL, timeout=30) as resp:
-                header.write_bytes(resp.read())
         with tempfile.TemporaryDirectory() as td:
             cfile = Path(td) / "shim.c"
             cfile.write_text(_SHIM_C)
@@ -96,7 +100,7 @@ def build_lzav() -> bool:  # pragma: no cover
                     "-o",
                     str(_LZAV_SO),
                     str(cfile),
-                    f"-I{_NATIVE_DIR}",
+                    f"-I{_LZAV_VENDOR}",
                 ],
                 check=True,
             )
@@ -136,22 +140,17 @@ def _lzav_codec() -> "Codec | None":
 
 
 def build_kanzi() -> bool:  # pragma: no cover
-    """Vendor kanzi-cpp and cargo-build the shim cdylib. Returns True on success.
+    """Cargo-build the kanzi-cpp shim cdylib from the vendored submodule. True on
+    success.
 
-    No-cover: needs git + cargo + network; exercised by ``just bench-setup``.
+    No-cover: needs cargo; exercised by ``just bench-setup``.
     """
     cargo = shutil.which("cargo")
     if cargo is None:
         return False
+    if not (_KANZI_VENDOR / "src").exists():  # submodule not initialized
+        return False
     try:
-        if not _KANZI_VENDOR.exists():
-            git = shutil.which("git")
-            if git is None:
-                return False
-            subprocess.run(
-                [git, "clone", "--depth", "1", _KANZI_REPO, str(_KANZI_VENDOR)],
-                check=True,
-            )
         subprocess.run(
             [
                 cargo,

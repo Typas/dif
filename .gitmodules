@@ -4,3 +4,9 @@
 [submodule "crates/libbsc-shim/vendor/libbsc"]
 	path = crates/libbsc-shim/vendor/libbsc
 	url = https://github.com/IlyaGrebnov/libbsc
+[submodule "crates/lzav-shim/vendor/lzav"]
+	path = crates/lzav-shim/vendor/lzav
+	url = https://github.com/avaneev/lzav
+[submodule "crates/kanzi-shim/vendor/kanzi-cpp"]
+	path = crates/kanzi-shim/vendor/kanzi-cpp
+	url = https://github.com/flanglet/kanzi-cpp
