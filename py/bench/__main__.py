@@ -175,6 +175,13 @@ def main(argv: list[str] | None = None) -> int:
         "resolved width shows in each row label as -8b/-16b",
     )
     f.add_argument(
+        "--dif-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="only measure DIF codecs and report M relative to the store baseline "
+        "(--no-dif-only restores the full PNG/WebP/JXL/AVIF/GIF comparison)",
+    )
+    f.add_argument(
         "--out",
         default="bench-formats.tsv",
         help="per-(image,format) results as TSV (default: bench-formats.tsv)",
@@ -198,6 +205,17 @@ def main(argv: list[str] | None = None) -> int:
     imgs = _images(args.images)
     if not imgs:
         print("no images; pass image files or a directory, e.g. data/testdata/")
+        return 1
+
+    lfs_pointers = [
+        p
+        for p in imgs
+        if open(p, "rb").read(200).startswith(b"version https://git-lfs.github.com")
+    ]
+    if lfs_pointers:
+        print("error: the following files are Git LFS pointers (run `git lfs pull`):")
+        for p in lfs_pointers:
+            print(f"  {p}")
         return 1
 
     if args.cmd == "codecs":
@@ -246,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                     stream=True,
                     numthreads=args.numthreads,
                     index_widths=args.index_width,
+                    dif_only=args.dif_only,
                 )
                 print()
                 w.writerows(cmp.iter_rows(p, rows))

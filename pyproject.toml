@@ -48,7 +48,7 @@ markers = ["slow: integration tests needing external tools (e.g. podman)"]
 
 # Coverage of the Python source (the `dif` core is Rust, measured by `just cov`).
 [tool.coverage.run]
-source = ["dif_tools", "bench"]
+source_pkgs = ["dif_tools", "bench"]
 branch = true
 # Standalone matplotlib analysis script (hyphenated, not importable, run by hand
 # on two TSVs) — not part of the library surface, so out of the coverage scope.

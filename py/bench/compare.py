@@ -25,7 +25,7 @@ from PIL import Image as PILImage
 
 from dif_tools import dif_image_from_array, load_image, resolve_raster
 
-from .metric import speed
+from .metric import compute_m, speed
 
 # The study's outer codec variants (docs/plan.md). `DIF_BASELINE` names the shipped
 # default codec; `REL_REF` is the `rel` reference column — every format's size is
@@ -100,6 +100,7 @@ class FormatResult:
     available: bool
     lossless: bool = True
     note: str = ""
+    m: float = float("nan")  # M score relative to store baseline (dif_only mode)
 
 
 def _as_rgb(arr: np.ndarray) -> np.ndarray:
@@ -146,6 +147,7 @@ def compare_image(
     stream: bool = False,
     numthreads: int = 1,
     index_widths: tuple[str, ...] | list[str] = ("auto",),
+    dif_only: bool = False,
 ) -> list[FormatResult]:
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
@@ -156,10 +158,6 @@ def compare_image(
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
     ref_size: int | None = None  # running reference for the live `rel` column
-
-    if stream:
-        print(_HEAD)
-        print(_SEP)
 
     def emit(name: str, enc, dec, expected, note: str = ""):
         """Measure one format, then print its row live (mirrors bench_image)."""
@@ -200,18 +198,75 @@ def compare_image(
         note = f"quant {img.source_colors}" if img.quantized() else ""
         return img.index_bits, note
 
+    pcs = list(palette_codecs) if palette_codecs else [None]
+    fcs = list(frame_codecs) if frame_codecs else [None]
+
+    if dif_only:
+        if stream:
+            print(_DIF_HEAD)
+            print(_DIF_SEP)
+
+        for iw in index_widths:
+            bits, note = dif_meta(iw)
+
+            store_r = _measure(
+                _dif_label("store", "store", "store", bits),
+                dif_enc("keep", "store", "store", "store", iw),
+                dif_dec,
+                None,
+                nbytes,
+                repeats,
+                note,
+            )
+            store_r.m = 0.0
+            rows.append(store_r)
+            if stream:
+                print(_dif_row_line(store_r))
+
+            for outer in dif_codecs:
+                for pal in pcs:
+                    for frm in fcs:
+                        p = outer if pal is None else pal
+                        f = outer if frm is None else frm
+                        r = _measure(
+                            _dif_label(outer, p, f, bits),
+                            dif_enc("keep", outer, p, f, iw),
+                            dif_dec,
+                            None,
+                            nbytes,
+                            repeats,
+                            note,
+                        )
+                        if (
+                            store_r.available
+                            and r.available
+                            and r.enc_mbps > 0
+                            and r.dec_mbps > 0
+                        ):
+                            r.m = compute_m(
+                                store_r.size / r.size,
+                                store_r.enc_mbps / r.enc_mbps,
+                                store_r.dec_mbps / r.dec_mbps,
+                            )
+                        rows.append(r)
+                        if stream:
+                            print(_dif_row_line(r))
+
+        return rows
+
     # The `rel` reference row (REL_REF picks it by name) is emitted first so every
     # row below has a live ratio and the table is topped by the baseline. png's
     # name and encoder are one unit; REL_REF only selects which row rel divides by.
     # FIXME: "emit ref first" assumes REL_REF == "png". If REL_REF moves to another
     # row, this hardcoded-first emit no longer matches it — rows above the real ref
     # get a stale live ratio. Drive the first-emit off REL_REF, or assert they agree.
+    if stream:
+        print(_HEAD)
+        print(_SEP)
     emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
 
     # All DIF rows for one index-width request share its resolved width + quant
     # note (the palette — hence the width — is the same across codecs/themes).
-    pcs = list(palette_codecs) if palette_codecs else [None]
-    fcs = list(frame_codecs) if frame_codecs else [None]
     for iw in index_widths:
         bits, note = dif_meta(iw)
 
@@ -335,6 +390,31 @@ def _row_line(r: FormatResult, ref_size: int | None) -> str:
     )
 
 
+# DIF-only mode display (M metric relative to store baseline).
+_DIF_M_W = 8
+_DIF_HEAD = (
+    f"| {'format':^{_FMT_W}} | {'size':^{_SIZE_W}} | {'enc MB/s':^{_SPD_W}} "
+    f"| {'dec MB/s':^{_SPD_W}} | {'M':^{_DIF_M_W}} | {'note':^{_NOTE_W}} |"
+)
+_DIF_SEP = (
+    f"|{'-' * (_FMT_W + 2)}|{'-' * (_SIZE_W + 2)}|{'-' * (_SPD_W + 2)}"
+    f"|{'-' * (_SPD_W + 2)}|{'-' * (_DIF_M_W + 2)}|{'-' * (_NOTE_W + 2)}|"
+)
+
+
+def _dif_row_line(r: FormatResult) -> str:
+    if not r.available:
+        return (
+            f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
+            f"| {'':^{_SPD_W}} | {'':^{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
+        )
+    m_str = f"{r.m:.2f}" if r.m == r.m else ""  # nan check
+    return (
+        f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {m_str:>{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
+    )
+
+
 def format_table(path: str | Path, rows: list[FormatResult]) -> str:
     lines = [_HEAD, _SEP]
     ref_size = _ref_size(rows)
@@ -349,6 +429,7 @@ TSV_HEADER = (
     "enc_mbps",
     "dec_mbps",
     "rel",
+    "M",
     "available",
     "note",
 )
@@ -360,6 +441,7 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
     ref_size = _ref_size(rows)
     for r in rows:
         rel = f"{r.size / ref_size:.4f}" if (ref_size and r.available) else ""
+        m_val = f"{r.m:.4f}" if (r.available and r.m == r.m) else ""
         yield (
             name,
             r.name,
@@ -367,6 +449,7 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
             f"{r.enc_mbps:.2f}" if r.available else "",
             f"{r.dec_mbps:.2f}" if r.available else "",
             rel,
+            m_val,
             int(r.available),
             r.note,
         )
@@ -390,6 +473,7 @@ class FormatStat:
     enc_mbps: float
     dec_mbps: float
     rel_mean: float
+    m_mean: float = float("nan")
     note: str = ""
 
 
@@ -404,6 +488,7 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
     for name, items in by_fmt.items():
         rs = [r for r, _ in items]
         rels = [r.size / d for r, d in items if d]
+        ms = [r.m for r in rs if r.m == r.m]  # exclude nan
         stats.append(
             FormatStat(
                 name,
@@ -412,11 +497,16 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
                 statistics.mean(r.enc_mbps for r in rs),
                 statistics.mean(r.dec_mbps for r in rs),
                 statistics.mean(rels) if rels else float("nan"),
+                statistics.mean(ms) if ms else float("nan"),
                 rs[-1].note,
             )
         )
-    # rel reference (REL_REF) first, then alphabetical by name (codecs cluster).
-    stats.sort(key=lambda s: (s.name != REL_REF, s.name))
+    # dif_only mode: sort by M mean descending; otherwise rel reference first.
+    has_m = any(s.m_mean == s.m_mean for s in stats)
+    if has_m:
+        stats.sort(key=lambda s: (s.m_mean != s.m_mean, -s.m_mean))
+    else:
+        stats.sort(key=lambda s: (s.name != REL_REF, s.name))
     return stats
 
 
@@ -445,14 +535,27 @@ def subdir_stats(reports: Sequence[ImageRows]) -> list[tuple[str, list[FormatSta
 
 def format_stats_table(stats: list[FormatStat]) -> str:
     """Aggregate block as a GitHub-flavored markdown table."""
-    rows = [
-        "| format | n | size | enc MB/s | dec MB/s | rel | note |",
-        "|---|--:|--:|--:|--:|--:|---|",
-    ]
-    for s in stats:
-        rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
-        rows.append(
-            f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
-            f"| {s.dec_mbps:.1f} | {rel} | {s.note} |"
-        )
+    has_m = any(s.m_mean == s.m_mean for s in stats)
+    if has_m:
+        rows = [
+            "| format | n | size | enc MB/s | dec MB/s | M mean | note |",
+            "|---|--:|--:|--:|--:|--:|---|",
+        ]
+        for s in stats:
+            m_str = "" if s.m_mean != s.m_mean else f"{s.m_mean:.3f}"
+            rows.append(
+                f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
+                f"| {s.dec_mbps:.1f} | {m_str} | {s.note} |"
+            )
+    else:
+        rows = [
+            "| format | n | size | enc MB/s | dec MB/s | rel | note |",
+            "|---|--:|--:|--:|--:|--:|---|",
+        ]
+        for s in stats:
+            rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
+            rows.append(
+                f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
+                f"| {s.dec_mbps:.1f} | {rel} | {s.note} |"
+            )
     return "\n".join(rows)
