@@ -16,8 +16,8 @@ from pathlib import Path
 
 from dif_tools import image_to_dif_image
 
-from .codecs import all_codecs
-from .metric import compute_m, memcpy_speed, speed
+from .codecs import Codec, all_codecs, select_codecs
+from .metric import compute_m, memcpy_speed, peak_rss, speed
 
 
 @dataclass
@@ -32,6 +32,7 @@ class CodecResult:
     d: float
     m: float
     available: bool
+    peak_mb: float = 0.0
     note: str = ""
 
 
@@ -56,39 +57,55 @@ class DirStat:
     d: float
     m_mean: float
     m_std: float
+    peak_mb: float = 0.0
     note: str = ""
 
 
 def bench_image(
-    path: str, raw: bytes, repeats: int = 5, numthreads: int = 1
+    path: str,
+    raw: bytes,
+    repeats: int = 5,
+    numthreads: int = 1,
+    codecs: list[Codec] | None = None,
 ) -> ImageReport:
     codec_w = 12
     ratio_w = 7
     speed_w = 14
     score_w = 7
+    peak_w = 9
     MB: int = 1048576
     print(
-        f"| {'codec':^{codec_w}} | {'S ratio':^{ratio_w}} | {'C speed (Mbps)':^{speed_w}} | {'D speed (Mbps)':^{speed_w}} | {'M score':^{score_w}} |"
+        f"| {'codec':^{codec_w}} | {'S ratio':^{ratio_w}} | {'C speed (Mbps)':^{speed_w}} | {'D speed (Mbps)':^{speed_w}} | {'M score':^{score_w}} | {'peak MB':^{peak_w}} |"
     )
     print(
-        f"|{'-' * (codec_w + 2)}|{'-' * (ratio_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (score_w + 2)}|"
+        f"|{'-' * (codec_w + 2)}|{'-' * (ratio_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (speed_w + 2)}|{'-' * (score_w + 2)}|{'-' * (peak_w + 2)}|"
     )
     mem = memcpy_speed(raw, repeats)
     print(
-        f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} |"
+        f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} | {'':>{peak_w}} |"
     )
     results: list[CodecResult] = []
     # Standalone algorithms only (no DIF container). `numthreads > 1` selects each
     # codec's multithreaded encoder where it has one (else single-thread).
-    for codec in all_codecs(numthreads):
+    if codecs is None:
+        codecs = all_codecs(numthreads)
+    for codec in codecs:
         if not codec.available:
             print(f"-- WARN: {codec.name} is not available, skipped")
             results.append(
-                CodecResult(codec.name, 0, 0, 0, 0, 0, float("-inf"), False, codec.note)
+                CodecResult(
+                    codec.name, 0, 0, 0, 0, 0, float("-inf"), False, 0.0, codec.note
+                )
             )
             continue
         try:
-            # The codec normally won't fail, don't try every time.
+            # The codec normally won't fail, don't try every time. Peak RSS is
+            # sampled over a single compress+decompress so it captures the codec's
+            # working set (incl. native allocations) as a delta over baseline.
+            with peak_rss() as pk:
+                comp = codec.compress(raw)
+                codec.decompress(comp, len(raw))
+            peak_mb = pk.delta / MB
             csp, comp = speed(lambda: codec.compress(raw), len(raw), repeats)
             dsp, decomp = speed(
                 lambda: codec.decompress(comp, len(raw)), len(raw), repeats
@@ -99,7 +116,7 @@ def bench_image(
             c, d = mem / csp, mem / dsp
             m = compute_m(s, c, d)
             print(
-                f"| {codec.name:^{codec_w}} | {s:>{ratio_w}.1f} | {csp / MB:>{speed_w}.1f} | {dsp / MB:>{speed_w}.1f} | {m:>{score_w}.1f} |"
+                f"| {codec.name:^{codec_w}} | {s:>{ratio_w}.1f} | {csp / MB:>{speed_w}.1f} | {dsp / MB:>{speed_w}.1f} | {m:>{score_w}.1f} | {peak_mb:>{peak_w}.1f} |"
             )
             results.append(
                 CodecResult(
@@ -111,6 +128,7 @@ def bench_image(
                     d,
                     m,
                     True,
+                    peak_mb,
                     codec.note,
                 )
             )
@@ -118,7 +136,16 @@ def bench_image(
             print(f"-- ERROR: {codec.name} has roundtrip failed, skipped")
             results.append(
                 CodecResult(
-                    codec.name, 0, 0, 0, 0, 0, float("-inf"), False, "roundtrip failed"
+                    codec.name,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    float("-inf"),
+                    False,
+                    0.0,
+                    "roundtrip failed",
                 )
             )
     results.sort(key=lambda r: r.m, reverse=True)
@@ -130,13 +157,17 @@ def run(
     strategy: str = "arithmetic",
     repeats: int = 5,
     numthreads: int = 1,
+    codec_specs: list[str] | None = None,
 ) -> list[ImageReport]:
+    # Resolve the codec selection once (same lzbench `-e` syntax as `--dif-codecs`);
+    # None = the whole registry. Raises ValueError on an unknown codec token.
+    codecs = select_codecs(codec_specs, numthreads)
     reports: list[ImageReport] = []
     count = len(paths)
     for i, p in enumerate(paths):
         print(f"Benchmarking {p} ({i + 1}/{count}):")
         raw = image_to_dif_image(p, strategy=strategy).to_difr()
-        reports.append(bench_image(str(p), raw, repeats, numthreads))
+        reports.append(bench_image(str(p), raw, repeats, numthreads, codecs))
     return reports
 
 
@@ -160,6 +191,7 @@ def _aggregate(reps: Sequence[ImageReport]) -> list[DirStat]:
                 statistics.mean(r.d for r in rs),
                 statistics.mean(ms),
                 statistics.pstdev(ms) if len(ms) > 1 else 0.0,
+                statistics.mean(r.peak_mb for r in rs),
                 notes[name],
             )
         )
@@ -196,18 +228,18 @@ def subdir_stats(
 def format_table(results: list[CodecResult]) -> str:
     head = (
         f"{'codec':<14}{'ratio S':>9}{'comp MB/s':>11}{'decomp MB/s':>13}"
-        f"{'C':>12}{'D':>12}{'M':>9}  note"
+        f"{'C':>12}{'D':>12}{'M':>9}{'peak MB':>10}  note"
     )
     lines = [head, "-" * len(head)]
     for r in results:
         if r.available:
             lines.append(
                 f"{r.name:<14}{r.ratio_s:>9.3f}{r.comp_mbps:>11.1f}{r.decomp_mbps:>13.1f}"
-                f"{r.c:>12.1f}{r.d:>12.1f}{r.m:>9.3f}  {r.note}"
+                f"{r.c:>12.1f}{r.d:>12.1f}{r.m:>9.3f}{r.peak_mb:>10.1f}  {r.note}"
             )
         else:
             lines.append(
-                f"{r.name:<14}{'unavailable':>9}{'':>11}{'':>13}{'':>12}{'':>12}{'':>9}  {r.note}"
+                f"{r.name:<14}{'unavailable':>9}{'':>11}{'':>13}{'':>12}{'':>12}{'':>9}{'':>10}  {r.note}"
             )
     return "\n".join(lines)
 
@@ -222,6 +254,7 @@ TSV_HEADER = (
     "C",
     "D",
     "M",
+    "peak_mb",
     "ok",
     "note",
 )
@@ -248,6 +281,7 @@ def iter_rows(reports: Sequence[ImageReport]):
             "1.00",
             "1.00",
             base,
+            "",
             1,
             "",
         )
@@ -263,6 +297,7 @@ def iter_rows(reports: Sequence[ImageReport]):
                 f"{r.c:.2f}",
                 f"{r.d:.2f}",
                 f"{r.m:.4f}",
+                f"{r.peak_mb:.1f}",
                 int(r.available),
                 r.note,
             )
@@ -271,12 +306,12 @@ def iter_rows(reports: Sequence[ImageReport]):
 def format_stats_table(stats: list[DirStat]) -> str:
     """Aggregate block as a GitHub-flavored markdown table."""
     rows = [
-        "| codec | n | ratio S | C | D | M mean | M std | note |",
-        "|---|--:|--:|--:|--:|--:|--:|---|",
+        "| codec | n | ratio S | C | D | M mean | M std | peak MB | note |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|---|",
     ]
     for s in stats:
         rows.append(
             f"| {s.name} | {s.n} | {s.ratio_s:.3f} | {s.c:.1f} | {s.d:.1f} "
-            f"| {s.m_mean:.3f} | {s.m_std:.3f} | {s.note} |"
+            f"| {s.m_mean:.3f} | {s.m_std:.3f} | {s.peak_mb:.1f} | {s.note} |"
         )
     return "\n".join(rows)

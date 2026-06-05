@@ -27,7 +27,7 @@ def derive_dark_base_color(base: Rgb, strategy: Strategy) -> Rgb:
 
 # Any codec variant string the core `Codec::parse` accepts: a bare family aliasing
 # its study-chosen default level (`zstd`->3, `brotli`->5, `deflate`->6, `lz4`->fast1,
-# `lzav`->1, `zxc`->3) or `family-level` for any in-table level (`zstd-3`, `zstd--7`,
+# `lzav`->1, `bsc`->2) or `family-level` for any in-table level (`zstd-3`, `zstd--7`,
 # `lz4-hc10`, `lzav-2`, `store`, …). The set is open, so this is just `str`; see
 # crates/dif-core Codec::parse for the truth, and `dif.validate_codec` to check one.
 CodecName = str

@@ -191,7 +191,7 @@ drawio-png IN OUT SCALE='2':
 
 # --- Python tools / tests -------------------------------------------------
 
-# Build optional native benchmark codecs (lzav + kanzi shim).
+# Build optional native benchmark codecs (lzav + kanzi + libbsc shims).
 bench-setup:
     uv run python -m bench setup
 

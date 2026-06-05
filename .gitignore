@@ -36,7 +36,12 @@ web/extension/out/
 # Benchmark output / built native shims
 bench-codecs.tsv
 bench-codecs-*.tsv
+bench-codecs-*.md
 bench-report.md
+bench-formats.tsv
+bench-formats-*.tsv
+bench-formats.md
+bench-formats-*.md
 py/bench/results/
 py/bench/_native/
 crates/kanzi-shim/vendor/

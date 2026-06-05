@@ -117,7 +117,7 @@ A codec byte packs a 4-bit *family* and a 4-bit *level index*:
   [0], [common-pick], [benchmark-derived presets; `0` = Store],
   [1], [DEFLATE], [`1…12`],
   [2], [Brotli], [`0…11`],
-  [3], [zxc], [`1…6` (1 fastest … 6 densest)],
+  [3], [libbsc (BWT)], [`1…3` (QLFC fast / static / adaptive)],
   [4],
   [Zstandard],
   [`−7, −5, −3, −1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22`],
@@ -238,11 +238,12 @@ layer runs it is no larger than the v2 varint stream in practice.
 `dif-core` is `no_std` + `alloc` by default, exposing the portable, pure-Rust set
 — Store, DEFLATE, LZ4 — which decodes in the WebAssembly build with no native
 dependencies. The `std` feature adds Brotli (pure Rust, wasm-decodable). The
-`native` feature adds Zstandard, a `libdeflate` encoder, LZAV, and zxc (C); zstd
-and LZAV reach the browser decoder when cross-compiled with `zig` (the
-`wasm-native` build), but zxc is native-only (its bindings don't cross-build to
-wasm), so a zxc `.dif` decodes only on the host. A heap allocator is always
-required.
+`native` feature adds Zstandard, a `libdeflate` encoder, LZAV, and libbsc — a
+BWT block compressor (C++) — as family 3; zstd and LZAV reach the browser decoder
+when cross-compiled with `zig` (the `wasm-native` build), but libbsc is
+native-only (it doesn't cross-build to wasm, and its decode needs roughly five
+times the block size in working memory), so a libbsc `.dif` decodes only on the
+host. A heap allocator is always required.
 
 The palette and each frame may use a different codec (`codec_palette`,
 `codec_frame`), and the whole intermediate body is wrapped by the outer `codec`;
@@ -259,9 +260,16 @@ where $S = "size"_"orig" \/ "size"_"comp"$ (ratio, higher better),
 $C = "memcpy"_"speed" \/ "compress"_"speed"$, and
 $D = "memcpy"_"speed" \/ "decompress"_"speed"$ (both slowdowns, lower better).
 Higher $M$ is better. Candidates: libdeflate L6 (baseline), Brotli 5/11,
-bzip3 @bzip3, kanzi 1/2 @kanzi, lz4hc 4/9 and lz4 fast @lz4, lzav @lzav,
-zstd fast/3/10/22 @zstd. kanzi and lzav are written in C/C++ and exposed to the
-Python harness as `ctypes` C-ABI shared libraries.
+bzip3 @bzip3, kanzi 1/2 @kanzi, libbsc (BWT), lz4hc 4/9 and lz4 fast @lz4,
+lzav @lzav, zstd fast/3/10/22 @zstd. kanzi, lzav and libbsc are written in C/C++
+and exposed to the Python harness as `ctypes` C-ABI shared libraries.
+
+The harness also records each codec's *peak resident memory* (MB) — the high-water
+RSS delta sampled over the compress + decompress run — since $M$ alone hides
+working-set cost. This is what makes libbsc (family 3) a non-default, native-only
+codec: its BWT needs roughly five times the block size in memory on both encode and
+decode (≈ 180 MB for a 34 MB plane), so despite leading the set on ratio it trades
+heavily on memory and is opt-in.
 
 = Evaluation
 
@@ -283,7 +291,8 @@ trail PNG/WebP/JXL; the 16-bit index ceiling also caps DIF at 65 536 colors.
   round-trips across the RGBA8/RGBA16 × 8/16-bit-index matrix.
 / `crates/dif-py`: PyO3/maturin bindings exposing the `dif` module.
 / `crates/dif-wasm`: `wasm-bindgen` decoder reusing `dif-core`.
-/ `crates/kanzi-shim`, `crates/lzav-shim`: C-codec shims for the benchmark.
+/ `crates/lzav-shim`, `crates/libbsc-shim`: vendored C/C++ codec shims linked by
+  `dif-core` (LZAV id 6, libbsc id 3); `crates/kanzi-shim`: a benchmark-only shim.
 / `py/dif_tools/`: image→DIF and drawio→PNG→DIF converters and the (encoder-side)
   dark-theme derivation strategies.
 / `py/bench/`: the $M$-metric codec harness and cross-format comparison.

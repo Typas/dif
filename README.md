@@ -205,7 +205,7 @@ just bench-formats img.png \
 ```
 
 Levels available per family (the DIF codec table): `deflate` `1…12`, `brotli`
-`0…11`, `zxc` `1…6`, `zstd` `-7,-5,-3,-1,1,2,3,6,8,10,12,14,16,18,20,22`, `lz4`
+`0…11`, `bsc` `1…3`, `zstd` `-7,-5,-3,-1,1,2,3,6,8,10,12,14,16,18,20,22`, `lz4`
 fast `fast1…fast512` / HC `hc2…hc12`, `lzav` `1,2`, plus `store`.
 
 Options: `--repeats` (default 3) · `--numthreads N` (default 1 = a 1-core

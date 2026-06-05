@@ -119,7 +119,9 @@ def test_bench_formats_dif_only_cli(tmp_path):
 
 def test_bench_lfs_pointer_detected(tmp_path, capsys):
     ptr = tmp_path / "fake.png"
-    ptr.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1234\n")
+    ptr.write_bytes(
+        b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1234\n"
+    )
     rc = bench_main(["formats", str(ptr)])
     assert rc == 1
     out = capsys.readouterr().out

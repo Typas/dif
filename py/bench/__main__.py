@@ -1,6 +1,6 @@
 """CLI for the benchmark harness.
 
-uv run python -m bench setup            # build optional native codecs (lzav)
+uv run python -m bench setup            # build optional native codecs (lzav, kanzi, libbsc)
 uv run python -m bench codecs [imgs..]  # rank codecs over .difr by M
 uv run python -m bench formats [imgs..] # compare DIF vs png/jxl/webp/avif/gif
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import native
 from . import compare as cmp
+from .codecs import select_codecs
 from .compare import DIF_CODECS, compare_image
 from .runner import (
     TSV_HEADER,
@@ -108,17 +109,27 @@ def _check_codecs(parser: argparse.ArgumentParser, *specs: list[str] | None) -> 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("setup", help="build optional native codecs (lzav, kanzi, zxc)")
+    sub.add_parser("setup", help="build optional native codecs (lzav, kanzi, libbsc)")
     c = sub.add_parser("codecs", help="rank codecs over .difr by M")
     c.add_argument("images", nargs="*")
     c.add_argument("--strategy", default="arithmetic")
     c.add_argument("--repeats", type=int, default=5)
     c.add_argument(
+        "--codecs",
+        type=_codecs,
+        default=None,
+        metavar="lzbench-spec",
+        help="select standalone codecs to bench, same lzbench `-e` syntax as "
+        "--dif-codecs: `/` separates families, `,` enumerates levels (default: the "
+        "whole registry), e.g. --codecs=zstd,3,10/bsc,1,2,3/lzav. Matches the names "
+        "shown in the table (with bsc->libbsc, deflate->libdeflate aliases)",
+    )
+    c.add_argument(
         "--numthreads",
         type=int,
         default=1,
         help="codec threads (default 1 = single-thread). >1 uses each codec's "
-        "multithreaded encoder where it has one (zstd, zxc), else single-thread",
+        "multithreaded encoder where it has one (zstd), else single-thread",
     )
     c.add_argument(
         "--out",
@@ -178,8 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         "--dif-only",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="only measure DIF codecs and report M relative to the store baseline "
-        "(--no-dif-only restores the full PNG/WebP/JXL/AVIF/GIF comparison)",
+        help="only measure DIF codecs and report M relative to the store baseline",
     )
     f.add_argument(
         "--out",
@@ -198,8 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         print("lzav shim:", "built" if lz else "FAILED (needs cc + network)")
         kz = native.build_kanzi()
         print("kanzi shim:", "built" if kz else "FAILED (needs cargo + git + network)")
-        zx = native.build_zxc()
-        print("zxc shim:", "built" if zx else "FAILED (needs cc + git + network)")
+        bs = native.build_libbsc()
+        print("libbsc shim:", "built" if bs else "FAILED (needs cc + c++ compiler)")
         return 0
 
     imgs = _images(args.images)
@@ -219,7 +229,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.cmd == "codecs":
-        reports = run(imgs, args.strategy, args.repeats, args.numthreads)
+        try:
+            select_codecs(args.codecs, args.numthreads)  # validate early
+        except ValueError as e:
+            ap.error(str(e))
+        reports = run(imgs, args.strategy, args.repeats, args.numthreads, args.codecs)
 
         # Per-image rows -> TSV (machine-parseable detail).
         with open(args.out, "w", newline="") as fh:

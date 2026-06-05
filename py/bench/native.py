@@ -1,20 +1,22 @@
-"""Optional native codecs that have no PyPI wheel: lzav and kanzi.
+"""Optional native codecs that have no PyPI wheel: lzav, kanzi and libbsc.
 
-Both are exposed to the benchmark as ``ctypes``-loaded C-ABI shared libraries.
+All are exposed to the benchmark as ``ctypes``-loaded C-ABI shared libraries.
 
 - **lzav**: a single public-domain header. :func:`build_lzav` fetches it and
   compiles a tiny shim into ``bench/_native``.
 - **kanzi**: adapted from kanzi-cpp via the Rust crate ``crates/kanzi-shim``
   (a cdylib wrapping kanzi's C API). :func:`build_kanzi` vendors kanzi-cpp and
   ``cargo build``s the shim; levels 1 and 2 are exposed.
+- **libbsc** (DIF family 3): the vendored C/C++ sources + extern-"C" wrapper
+  already used by ``dif-core``'s ``bsc`` codec (``crates/libbsc-shim``).
+  :func:`build_libbsc` compiles them into a ``.so`` (no network); levels 1–3.
 
-Run ``python -m bench setup`` to build both.
+Run ``python -m bench setup`` to build them.
 """
 
 from __future__ import annotations
 
 import ctypes
-import platform
 import shutil
 import subprocess
 import tempfile
@@ -35,27 +37,30 @@ _KANZI_SO = _KANZI_DIR / "target/release/libkanzi_shim.so"
 _KANZI_REPO = "https://github.com/flanglet/kanzi-cpp"
 _KANZI_VENDOR = _KANZI_DIR / "vendor/kanzi-cpp"
 
-_ZXC_REPO = "https://github.com/hellobertrand/zxc"
-_ZXC_SRC = _NATIVE_DIR / "zxc"
-_ZXC_SO = _NATIVE_DIR / "libzxcshim.so"
-_ZXC_LEVELS = (1, 3, 6)
-
-_ZXC_SHIM_C = """
-#include <stdint.h>
-#include <string.h>
-#include "zxc.h"
-uint64_t shim_bound(uint64_t n){ return (uint64_t)zxc_compress_bound((size_t)n); }
-long long shim_compress(const void* s, uint64_t sl, void* d, uint64_t dl,
-                        int level, int n_threads){
-    zxc_compress_opts_t o; memset(&o, 0, sizeof o);
-    o.level = level; o.n_threads = n_threads;
-    return (long long)zxc_compress(s, (size_t)sl, d, (size_t)dl, &o);
-}
-long long shim_decompress(const void* s, uint64_t sl, void* d, uint64_t dl){
-    zxc_decompress_opts_t o; memset(&o, 0, sizeof o);
-    return (long long)zxc_decompress(s, (size_t)sl, d, (size_t)dl, &o);
-}
-"""
+# libbsc (family 3): reuse the C/C++ sources + extern-"C" wrapper that dif-core's
+# `bsc` codec links (the crates/libbsc-shim/vendor/libbsc git submodule), compiled
+# here into a ctypes .so. BWT block compressor; CPU single-thread (CUDA/OpenMP
+# left undefined). The library tree is the submodule's `libbsc/` subdir.
+_LIBBSC_DIR = _ROOT / "crates/libbsc-shim"
+_LIBBSC_ROOT = _LIBBSC_DIR / "vendor/libbsc"  # submodule repo root
+_LIBBSC_VENDOR = _LIBBSC_ROOT / "libbsc"  # source tree inside it
+_LIBBSC_WRAPPER = _LIBBSC_DIR / "wrapper.cpp"
+_LIBBSC_SO = _NATIVE_DIR / "libbscshim.so"
+_LIBBSC_LEVELS = (1, 2, 3)  # QLFC coder: fast / static / adaptive
+# C++ sources (mirrors crates/libbsc-shim/build.rs); libsais.c built separately as C.
+_LIBBSC_CPP = (
+    "adler32/adler32.cpp",
+    "bwt/bwt.cpp",
+    "coder/coder.cpp",
+    "coder/qlfc/qlfc.cpp",
+    "coder/qlfc/qlfc_model.cpp",
+    "filters/detectors.cpp",
+    "filters/preprocessing.cpp",
+    "libbsc/libbsc.cpp",
+    "lzp/lzp.cpp",
+    "platform/platform.cpp",
+    "st/st.cpp",
+)
 
 _SHIM_C = """
 #include "lzav.h"
@@ -207,147 +212,112 @@ def _kanzi_codecs() -> list["Codec"]:
     return [make(1), make(2)]
 
 
-# zxc compiles compress/decompress/huffman once per SIMD ISA (each tagged with a
-# ZXC_FUNCTION_SUFFIX); the rest compile plain and the dispatcher selects at
-# runtime. Mirror meson.build's `variant_sets`.
-_ZXC_VARIANT_SRCS = ("zxc_compress.c", "zxc_decompress.c", "zxc_huffman.c")
-_ZXC_PLAIN_SRCS = (
-    "zxc_common.c",
-    "zxc_driver.c",
-    "zxc_dispatch.c",
-    "zxc_pstream.c",
-    "zxc_seekable.c",
-)
+def build_libbsc() -> bool:  # pragma: no cover
+    """Compile libbsc + the extern-"C" wrapper into a ctypes shared lib.
 
-
-def _zxc_variants() -> list[tuple[str, list[str]]]:
-    m = platform.machine().lower()
-    if m in ("x86_64", "amd64"):
-        return [
-            ("_default", []),
-            ("_sse2", ["-msse2"]),
-            ("_avx2", ["-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt"]),
-            ("_avx512", ["-mavx512f", "-mavx512bw", "-mbmi", "-mbmi2", "-mlzcnt"]),
-        ]
-    if m in ("aarch64", "arm64"):
-        return [("_default", []), ("_neon", ["-march=armv8-a+simd"])]
-    if m.startswith("arm"):
-        return [("_default", []), ("_neon", ["-march=armv7-a", "-mfpu=neon"])]
-    return [("_default", [])]
-
-
-def build_zxc() -> bool:  # pragma: no cover
-    """Clone hellobertrand/zxc and compile its C + a shim into a shared lib.
-
-    No-cover: needs git + a C compiler + network; exercised by ``bench setup``.
+    Sources come from the ``crates/libbsc-shim/vendor/libbsc`` git submodule (run
+    ``git submodule update --init`` first; no network at build); mirrors that
+    crate's ``build.rs``. No-cover: needs a C and C++ compiler; exercised by
+    ``bench setup``.
     """
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-    git = shutil.which("git")
-    if cc is None or git is None:
+    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    if cc is None or cxx is None:
+        return False
+    if not (_LIBBSC_VENDOR / "libbsc.h").exists():
         return False
     _NATIVE_DIR.mkdir(exist_ok=True)
-    lib = _ZXC_SRC / "src/lib"
-    includes = [
-        f"-I{_ZXC_SRC / 'include'}",
-        f"-I{lib}",
-        f"-I{lib / 'vendors'}",
-    ]
+    includes = [f"-I{_LIBBSC_ROOT}", f"-I{_LIBBSC_VENDOR}"]
     try:
-        if not _ZXC_SRC.exists():
-            subprocess.run(
-                [git, "clone", "--depth", "1", _ZXC_REPO, str(_ZXC_SRC)], check=True
-            )
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
             objs: list[str] = []
 
-            def cc_obj(src: Path, out: Path, extra: list[str]) -> None:
+            # libsais is C99 -> compile as C.
+            sais_o = tdp / "libsais.o"
+            subprocess.run(
+                [
+                    cc,
+                    "-O3",
+                    "-fPIC",
+                    "-c",
+                    str(_LIBBSC_VENDOR / "bwt/libsais/libsais.c"),
+                    "-o",
+                    str(sais_o),
+                    *includes,
+                ],
+                check=True,
+            )
+            objs.append(str(sais_o))
+
+            # libbsc C++ sources + the extern-"C" wrapper (unique basenames).
+            for src in (*(_LIBBSC_VENDOR / n for n in _LIBBSC_CPP), _LIBBSC_WRAPPER):
+                out = tdp / f"{src.stem}.o"
                 subprocess.run(
                     [
-                        cc,
+                        cxx,
                         "-O3",
                         "-fPIC",
+                        "-std=c++17",
                         "-c",
                         str(src),
                         "-o",
                         str(out),
-                        *extra,
                         *includes,
                     ],
                     check=True,
                 )
                 objs.append(str(out))
 
-            # Per-ISA variant objects (suffix-tagged function names).
-            for suffix, flags in _zxc_variants():
-                for name in _ZXC_VARIANT_SRCS:
-                    out = tdp / f"{Path(name).stem}{suffix}.o"
-                    cc_obj(lib / name, out, [f"-DZXC_FUNCTION_SUFFIX={suffix}", *flags])
-            # Plain objects (the dispatcher + driver + the shim).
-            for name in _ZXC_PLAIN_SRCS:
-                cc_obj(lib / name, tdp / f"{Path(name).stem}.o", [])
-            shim = tdp / "shim.c"
-            shim.write_text(_ZXC_SHIM_C)
-            cc_obj(shim, tdp / "shim.o", [])
-
-            subprocess.run(
-                [cc, "-shared", "-pthread", "-o", str(_ZXC_SO), *objs], check=True
-            )
-        return _ZXC_SO.exists()
+            subprocess.run([cxx, "-shared", "-o", str(_LIBBSC_SO), *objs], check=True)
+        return _LIBBSC_SO.exists()
     except Exception:
         return False
 
 
-def _zxc_codecs() -> list["Codec"]:
-    if not _ZXC_SO.exists():
+def _libbsc_codecs() -> list["Codec"]:
+    if not _LIBBSC_SO.exists():
         return []
-    lib = ctypes.CDLL(str(_ZXC_SO))
-    lib.shim_bound.restype = ctypes.c_uint64
-    lib.shim_bound.argtypes = [ctypes.c_uint64]
-    lib.shim_compress.restype = ctypes.c_longlong
-    lib.shim_compress.argtypes = [
+    lib = ctypes.CDLL(str(_LIBBSC_SO))
+    lib.bscshim_bound.restype = ctypes.c_int
+    lib.bscshim_bound.argtypes = [ctypes.c_int]
+    lib.bscshim_compress.restype = ctypes.c_int
+    lib.bscshim_compress.argtypes = [
         ctypes.c_void_p,
-        ctypes.c_uint64,
+        ctypes.c_int,
         ctypes.c_void_p,
-        ctypes.c_uint64,
         ctypes.c_int,
         ctypes.c_int,
     ]
-    lib.shim_decompress.restype = ctypes.c_longlong
-    lib.shim_decompress.argtypes = [
+    lib.bscshim_decompress.restype = ctypes.c_int
+    lib.bscshim_decompress.argtypes = [
         ctypes.c_void_p,
-        ctypes.c_uint64,
+        ctypes.c_int,
         ctypes.c_void_p,
-        ctypes.c_uint64,
+        ctypes.c_int,
     ]
 
     from .codecs import Codec as _C
 
     def make(level: int) -> "Codec":
-        def _enc(data: bytes, n_threads: int) -> bytes:
-            bound = lib.shim_bound(len(data))
-            dst = ctypes.create_string_buffer(bound)
-            n = lib.shim_compress(data, len(data), dst, bound, level, n_threads)
-            if n < 0:
-                raise RuntimeError(f"zxc compress failed ({n})")
-            return dst.raw[:n]
-
         def compress(data: bytes) -> bytes:
-            return _enc(data, 0)
-
-        def mt_compress(data: bytes, nt: int) -> bytes:
-            return _enc(data, nt)
+            bound = lib.bscshim_bound(len(data))
+            dst = ctypes.create_string_buffer(bound)
+            n = lib.bscshim_compress(data, len(data), dst, bound, level)
+            if n < 0:
+                raise RuntimeError(f"libbsc compress failed ({n})")
+            return dst.raw[:n]
 
         def decompress(comp: bytes, orig_len: int) -> bytes:
             dst = ctypes.create_string_buffer(orig_len)
-            n = lib.shim_decompress(comp, len(comp), dst, orig_len)
+            n = lib.bscshim_decompress(comp, len(comp), dst, orig_len)
             if n < 0:
-                raise RuntimeError(f"zxc decompress failed ({n})")
+                raise RuntimeError(f"libbsc decompress failed ({n})")
             return dst.raw[:n]
 
-        return _C(f"zxc-{level}", compress, decompress, mt_compress=mt_compress)
+        return _C(f"libbsc-{level}", compress, decompress)
 
-    return [make(lvl) for lvl in _ZXC_LEVELS]
+    return [make(lvl) for lvl in _LIBBSC_LEVELS]
 
 
 def codecs() -> list["Codec"]:
@@ -356,5 +326,5 @@ def codecs() -> list["Codec"]:
     if c is not None:
         out.append(c)
     out.extend(_kanzi_codecs())
-    out.extend(_zxc_codecs())
+    out.extend(_libbsc_codecs())
     return out

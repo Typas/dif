@@ -1,3 +1,6 @@
 [submodule "third_party/drawio"]
 	path = third_party/drawio
 	url = https://github.com/jgraph/drawio
+[submodule "crates/libbsc-shim/vendor/libbsc"]
+	path = crates/libbsc-shim/vendor/libbsc
+	url = https://github.com/IlyaGrebnov/libbsc

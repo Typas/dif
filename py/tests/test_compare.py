@@ -55,7 +55,7 @@ def test_dif_label_abbreviations():
     assert _abbr("lz4-fast1") == "4f1"
     assert _abbr("lz4-hc9") == "4hc9"
     assert _abbr("lzav-1") == "av1"
-    assert _abbr("zxc-3") == "zxc3"
+    assert _abbr("bsc-2") == "bsc2"
     assert _abbr("store") == "st"
     # The resolved index width is always suffixed (-8b / -16b).
     assert _dif_label("zstd-3", "zstd-3", "zstd-3", 8) == "dif-zst3-8b"

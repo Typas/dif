@@ -37,8 +37,9 @@ pub enum CodecId {
     Deflate = 1,
     /// Brotli (`brotli` crate). Requires the `std` feature.
     Brotli = 2,
-    /// zxc (BSD-3) via the `zxc-compress` crate. Requires the `zxc` feature.
-    Zxc = 3,
+    /// libbsc BWT (Apache-2.0) via the vendored C++ shim. Requires the `bsc`
+    /// feature; native-only (no wasm decode).
+    Bsc = 3,
     /// Zstandard via `zstd-safe`. Requires a C-codec feature.
     Zstd = 4,
     /// LZ4 block via `lz4_flex` (pure-Rust, portable + wasm-decodable).
@@ -53,7 +54,7 @@ enum Method {
     Store,
     Deflate,
     Brotli,
-    Zxc,
+    Bsc,
     Zstd,
     Lz4,
     Lzav,
@@ -63,8 +64,9 @@ enum Method {
 // (nominal) level recorded for provenance and used by encoders that honor it.
 const DEFLATE_LEVELS: [i32; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const BROTLI_LEVELS: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-// zxc levels 1..=6 (1 fastest, 6 densest).
-const ZXC_LEVELS: [i32; 6] = [1, 2, 3, 4, 5, 6];
+// libbsc levels: QLFC coder 1=fast, 2=static (default), 3=adaptive (densest),
+// all over a BWT block. Provenance + the value the shim maps to a coder.
+const BSC_LEVELS: [i32; 3] = [1, 2, 3];
 const ZSTD_LEVELS: [i32; 16] = [-7, -5, -3, -1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22];
 // LZ4: sign aligned with Zstandard (negative = fast) — negative = `lz4_flex` fast
 // acceleration (|level| = accel), positive = HC level. Provenance only; `lz4_flex`
@@ -105,7 +107,7 @@ impl Codec {
             },
             1 => Ok((Method::Deflate, pick(&DEFLATE_LEVELS)?)),
             2 => Ok((Method::Brotli, pick(&BROTLI_LEVELS)?)),
-            3 => Ok((Method::Zxc, pick(&ZXC_LEVELS)?)),
+            3 => Ok((Method::Bsc, pick(&BSC_LEVELS)?)),
             4 => Ok((Method::Zstd, pick(&ZSTD_LEVELS)?)),
             5 => Ok((Method::Lz4, pick(&LZ4_LEVELS)?)),
             6 => Ok((Method::Lzav, pick(&LZAV_LEVELS)?)),
@@ -147,7 +149,7 @@ impl Codec {
         let (fam, table, default): (CodecId, &[i32], i32) = match fam_str {
             "deflate" | "libdeflate" => (CodecId::Deflate, &DEFLATE_LEVELS, 6),
             "brotli" => (CodecId::Brotli, &BROTLI_LEVELS, 5),
-            "zxc" => (CodecId::Zxc, &ZXC_LEVELS, 3),
+            "bsc" => (CodecId::Bsc, &BSC_LEVELS, 2),
             "zstd" => (CodecId::Zstd, &ZSTD_LEVELS, 3),
             "lz4" => (CodecId::Lz4, &LZ4_LEVELS, -1),
             "lzav" => (CodecId::Lzav, &LZAV_LEVELS, 1),
@@ -182,7 +184,7 @@ fn compress(method: Method, level: i32, data: &[u8], workers: u32) -> Result<Vec
         Method::Zstd => zstd_compress(data, level, workers, None),
         Method::Lz4 => Ok(lz4_flex::block::compress(data)),
         Method::Lzav => lzav_compress(data),
-        Method::Zxc => zxc_compress(data, level),
+        Method::Bsc => bsc_compress(data, level),
     }
 }
 
@@ -203,7 +205,7 @@ fn decompress(method: Method, data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
             lz4_flex::block::decompress(data, raw_len).map_err(|_| DifError::CompressionFailed)
         }
         Method::Lzav => lzav_decompress(data, raw_len),
-        Method::Zxc => zxc_decompress(data, raw_len),
+        Method::Bsc => bsc_decompress(data, raw_len),
     }
 }
 
@@ -253,39 +255,27 @@ fn lzav_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
     Err(DifError::Invalid("lzav codec requires a C-codec feature"))
 }
 
-// --- zxc: BSD-3 C lib via the `zxc-compress` crate (feature `zxc`). The stream
-//     is self-describing, so decode ignores the known raw length. ---
+// --- libbsc: BWT block compressor via the vendored C++ shim (feature `bsc`).
+//     The shim tags every blob and decode is bounded by the known raw length. ---
 
-#[cfg(feature = "zxc")]
-fn zxc_level(level: i32) -> zxc::Level {
-    match level {
-        1 => zxc::Level::Fastest,
-        2 => zxc::Level::Fast,
-        3 => zxc::Level::Default,
-        4 => zxc::Level::Balanced,
-        5 => zxc::Level::Compact,
-        _ => zxc::Level::Density,
-    }
+#[cfg(feature = "bsc")]
+fn bsc_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    libbsc_shim::compress(data, level).ok_or(DifError::CompressionFailed)
 }
 
-#[cfg(feature = "zxc")]
-fn zxc_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
-    zxc::compress(data, zxc_level(level), None).map_err(|_| DifError::CompressionFailed)
+#[cfg(feature = "bsc")]
+fn bsc_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
+    libbsc_shim::decompress(data, raw_len).ok_or(DifError::CompressionFailed)
 }
 
-#[cfg(feature = "zxc")]
-fn zxc_decompress(data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
-    zxc::decompress(data).map_err(|_| DifError::CompressionFailed)
+#[cfg(not(feature = "bsc"))]
+fn bsc_compress(_data: &[u8], _level: i32) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("bsc codec requires the `bsc` feature"))
 }
 
-#[cfg(not(feature = "zxc"))]
-fn zxc_compress(_data: &[u8], _level: i32) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("zxc codec requires the `zxc` feature"))
-}
-
-#[cfg(not(feature = "zxc"))]
-fn zxc_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
-    Err(DifError::Invalid("zxc codec requires the `zxc` feature"))
+#[cfg(not(feature = "bsc"))]
+fn bsc_decompress(_data: &[u8], _raw_len: usize) -> Result<Vec<u8>> {
+    Err(DifError::Invalid("bsc codec requires the `bsc` feature"))
 }
 
 // --- Brotli: std-only (the `brotli` crate's streaming Reader/Writer need std) ---
@@ -821,7 +811,7 @@ mod tests {
         {
             codecs.push("zstd-3");
             codecs.push("lzav-1");
-            codecs.push("zxc-3");
+            codecs.push("bsc-2");
         }
         for name in codecs {
             let c = Codec::parse(name).unwrap();
@@ -939,7 +929,7 @@ mod tests {
     #[cfg(feature = "native")]
     fn no_split_codecs_roundtrip_under_thread_pressure() {
         let img = multi(2, 8);
-        for name in ["lz4", "lzav-1", "deflate", "zxc-3", "brotli-5"] {
+        for name in ["lz4", "lzav-1", "deflate", "bsc-2", "brotli-5"] {
             let c = Codec::parse(name).unwrap();
             let bytes = to_dif_workers(&img, Codec::store(), Codec::store(), c, 8).unwrap();
             let back = from_dif_workers(&bytes, 8).unwrap();

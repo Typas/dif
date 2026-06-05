@@ -27,10 +27,11 @@ zstd-safe = { version = "7.2", optional = true }
 libdeflater = { version = "1.23", optional = true }
 # lzav-1 via the vendored C shim (avaneev/lzav); native/wasm-native only.
 lzav-shim = { path = "../lzav-shim", optional = true }
-# zxc (family 3): BSD-3-Clause; the wrapper builds the bundled C via `cc` (no
-# bindgen) and exposes one-shot, self-describing compress/decompress. C-linked,
-# so it's gated behind the `zxc` feature (native; wasm-native if it cross-builds).
-zxc-compress = { version = "0.11", optional = true }
+# libbsc (family 3): BWT block compressor (IlyaGrebnov/libbsc, Apache-2.0) via a
+# vendored C++ shim built with `cc`. Highest ratio in the set; CPU single-thread,
+# and decode memory ~5x block, so it's a non-default, native-only codec gated
+# behind the `bsc` feature (doesn't cross-build to the wasm decoder).
+libbsc-shim = { path = "../libbsc-shim", optional = true }
 # OKLab/OKLCh color math for the encode-side dark-theme derivation (`encode`
 # feature). f64-generic, so it reproduces the numpy reference within rounding.
 # Encode-only — gated out of the no_std core and the wasm decoder.
@@ -52,16 +53,16 @@ zstd-mt = ["c-codecs", "zstd-safe/zstdmt"]
 # off wasm). Emits a single standard brotli stream (parallel meta-blocks) decoded
 # by the normal path; no format change. Worth it for the slow high-quality levels.
 brotli-mt = ["std"]
-# zxc codec (family 3): BSD-3-Clause C lib built via `cc`. Encode + decode.
-zxc = ["std", "dep:zxc-compress"]
+# bsc codec (family 3): libbsc BWT via the vendored C++ shim. Encode + decode.
+bsc = ["std", "dep:libbsc-shim"]
 # Encode-side dark-theme derivation (OKLab via `palette`). Encode-only, so it is
 # kept off the wasm decoder build to avoid pulling `palette` into the browser.
 encode = ["std", "dep:palette"]
 # Native host build: the C codecs (incl. multithreaded zstd + brotli), libdeflate
-# encoder, zxc, and dark-theme derivation.
-native = ["c-codecs", "zstd-mt", "brotli-mt", "dep:libdeflater", "zxc", "encode"]
+# encoder, libbsc (bsc), and dark-theme derivation.
+native = ["c-codecs", "zstd-mt", "brotli-mt", "dep:libdeflater", "bsc", "encode"]
 # wasm decoder with the C codecs cross-compiled (decode-only, so no libdeflate
-# encoder and no `encode`). zxc is NOT here: `zxc-compress`'s file.rs uses
-# host-only file-descriptor calls that don't build on wasm32-wasip1, so zxc is
-# native-only and zxc `.dif`s don't decode in-browser (degraded-codec pattern).
+# encoder and no `encode`). bsc is NOT here: libbsc is C++ with ~5x-block decode
+# memory and doesn't target the wasm decoder, so bsc is native-only and bsc
+# `.dif`s don't decode in-browser (degraded-codec pattern).
 wasm-native = ["c-codecs"]

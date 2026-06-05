@@ -48,7 +48,7 @@ _FAMILY_ABBR = {
     "deflate": "PK",
     "libdeflate": "PK",
     "brotli": "br",
-    "zxc": "zxc",
+    "bsc": "bsc",
     "zstd": "zst",
     "lzav": "av",
 }
@@ -57,7 +57,7 @@ _DEFAULT_LEVEL = {
     "deflate": "6",
     "libdeflate": "6",
     "brotli": "5",
-    "zxc": "3",
+    "bsc": "2",
     "zstd": "3",
     "lzav": "1",
 }

@@ -58,17 +58,18 @@ try:
 except ImportError:  # pragma: no cover
     _add(_unavailable("libdeflate-6", "pip install deflate"))
 
-# --- brotli ---------------------------------------------------------------
+# --- brotli (5 = study default, 11 = max quality) -------------------------
 try:
     import brotli as _brotli
 
-    _add(
-        Codec(
-            "brotli-5",
-            lambda d: _brotli.compress(d, quality=5),
-            lambda c, n: _brotli.decompress(c),
+    for _q in (5, 11):
+        _add(
+            Codec(
+                f"brotli-{_q}",
+                (lambda q: lambda d: _brotli.compress(d, quality=q))(_q),
+                lambda c, n: _brotli.decompress(c),
+            )
         )
-    )
 except ImportError:  # pragma: no cover
     _add(_unavailable("brotli", "pip install brotli"))
 
@@ -113,7 +114,13 @@ try:
 
         return mt
 
-    for _label, _lvl in (("zstd-fast1", -1), ("zstd-3", 3), ("zstd-10", 10)):
+    for _label, _lvl in (
+        ("zstd-fast1", -1),
+        ("zstd-3", 3),
+        ("zstd-10", 10),
+        ("zstd-18", 18),
+        ("zstd-22", 22),
+    ):
         _add(
             Codec(
                 _label,
@@ -125,7 +132,7 @@ try:
 except ImportError:  # pragma: no cover
     _add(_unavailable("zstd", "pip install pyzstd"))
 
-# --- lzav / kanzi / zxc: optional native shims (see bench/native.py) ------
+# --- lzav / kanzi / libbsc: optional native shims (see bench/native.py) ------
 from . import native as _native  # noqa: E402
 
 for _c in _native.codecs():
@@ -153,3 +160,49 @@ def all_codecs(numthreads: int = 1) -> list[Codec]:
 
 def available_codecs(numthreads: int = 1) -> list[Codec]:
     return [c for c in all_codecs(numthreads) if c.available]
+
+
+# Aliases so `--codecs` accepts the DIF family names (`bsc`, `deflate`) as well as
+# the registry/table names (`libbsc`, `libdeflate`) the harness actually displays.
+_FAMILY_ALIASES = {"bsc": "libbsc", "deflate": "libdeflate"}
+
+
+def _family(name: str) -> str:
+    """Codec family: the name without its trailing ``-level`` (``zstd-3`` -> ``zstd``)."""
+    return name.rsplit("-", 1)[0] if "-" in name else name
+
+
+def _canon(token: str) -> str:
+    """Rewrite a DIF-family token to its registry name, keeping any ``-level``
+    suffix (``bsc`` -> ``libbsc``, ``bsc-2`` -> ``libbsc-2``)."""
+    fam = _family(token)
+    return _FAMILY_ALIASES[fam] + token[len(fam) :] if fam in _FAMILY_ALIASES else token
+
+
+def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
+    """Filter the registry by lzbench ``-e`` tokens (see ``bench.__main__._codecs``).
+
+    A bare family token (``zstd``, ``libbsc``) selects every level of that family;
+    a ``family-level`` token (``zstd-3``) selects that exact codec. Matching is
+    against the names shown in the table, with the ``bsc``/``deflate`` aliases.
+    ``None``/empty = the whole registry. Raises ``ValueError`` naming any token
+    that matches no registered codec.
+    """
+    if not specs:
+        return all_codecs(numthreads)
+    tokens = [_canon(s) for s in specs]
+    exact = {t for t in tokens if "-" in t}
+    families = {t for t in tokens if "-" not in t}
+    out = [
+        c
+        for c in all_codecs(numthreads)
+        if c.name in exact or _family(c.name) in families
+    ]
+    matched = {c.name for c in out} | {_family(c.name) for c in out}
+    missing = [orig for orig, t in zip(specs, tokens) if t not in matched]
+    if missing:
+        names = ", ".join(sorted({c.name for c in _REGISTRY}))
+        raise ValueError(
+            f"no registered codec matches: {', '.join(missing)}; available: {names}"
+        )
+    return out
