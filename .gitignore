@@ -33,15 +33,7 @@ web/extension/out/
 # Generated artifacts (rendered PNGs, converted files, bench scratch)
 /out/
 
-# Benchmark output / built native shims
-bench-codecs.tsv
-bench-codecs-*.tsv
-bench-codecs-*.md
-bench-report.md
-bench-formats.tsv
-bench-formats-*.tsv
-bench-formats.md
-bench-formats-*.md
+# Built native shims
 py/bench/results/
 py/bench/_native/
-crates/kanzi-shim/Cargo.lock
+crates/*-shim/Cargo.lock
