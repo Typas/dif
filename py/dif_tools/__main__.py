@@ -5,8 +5,19 @@ from __future__ import annotations
 import argparse
 import sys
 
+import dif
+
 from .convert import convert_file
 from .themes import STRATEGIES
+
+
+def _codec(name: str) -> str:
+    """An ``argparse`` type that accepts any codec variant the core
+    ``Codec::parse`` accepts (the single source of truth), not a hand-maintained
+    subset. ``dif.validate_codec`` raises ``ValueError`` on an unknown family or
+    level, which argparse turns into a usage error."""
+    dif.validate_codec(name)
+    return name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,38 +35,31 @@ def main(argv: list[str] | None = None) -> int:
         default="arithmetic",
         help="how to synthesize the dark theme (default: arithmetic)",
     )
-    _CODECS = (
-        "store",
-        "libdeflate-6",
-        "brotli-5",
-        "brotli-11",
-        "zstd-3",
-        "zstd-10",
-        "zstd-22",
-        "lz4-fast1",
-        "lzav-1",
-        "bsc-2",
-    )
+    # Codec args accept any variant string `Codec::parse` accepts (validated via
+    # `dif.validate_codec`), e.g. `store`, `zstd-16`, `brotli-11`, `lz4-fast1`.
     conv.add_argument(
         "--codec",
-        choices=_CODECS,
-        default="zstd-3",
+        type=_codec,
+        metavar="CODEC",
+        default="store",
         help=(
-            "outer whole-body codec for .dif (default: zstd-3); prefer 'store' for "
-            "multi-frame so frames stay seekable for low-memory parallel decode"
+            "outer whole-body codec for .dif (default: store, which keeps frames "
+            "seekable for low-memory parallel decode)"
         ),
     )
     conv.add_argument(
         "--palette-codec",
-        choices=_CODECS,
-        default="store",
-        help="per-palette section codec (default: store)",
+        type=_codec,
+        metavar="CODEC",
+        default="zstd-16",
+        help="per-palette section codec (default: zstd-16)",
     )
     conv.add_argument(
         "--frame-codec",
-        choices=_CODECS,
-        default="store",
-        help="per-frame section codec (default: store)",
+        type=_codec,
+        metavar="CODEC",
+        default="zstd-10",
+        help="per-frame section codec (default: zstd-10)",
     )
     conv.add_argument(
         "--raw", action="store_true", help="write uncompressed .difr instead"

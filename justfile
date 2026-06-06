@@ -136,6 +136,38 @@ wasm-test:
 regen-demo:
     uv run python py/regen_flowchart.py
 
+# Convert one image (PNG/TIFF/JPEG/...) or a .drawio diagram to .dif using the
+# shipped triplet: outer=store (seekable random-access), palette=zstd-16,
+# frame=zstd-10, with a 2-theme palette (light source + OKLab-derived dark).
+# Run `just py` first so the `dif` module exists. Override any arg, e.g.
+# `just convert in.png out.dif strategy=keep` for a single (light) theme, or
+# `just convert in.png out.dif frame_codec=brotli-11`.
+convert IN OUT threads="1" index_width="auto" frame_codec="zstd-10" palette_codec="zstd-16" outer_codec="store" strategy="arithmetic":
+    uv run python -m dif_tools convert "{{IN}}" "{{OUT}}" \
+        --theme-strategy {{strategy}} \
+        --codec {{outer_codec}} \
+        --palette-codec {{palette_codec}} \
+        --frame-codec {{frame_codec}} \
+        --index-width {{index_width}} \
+        --threads {{threads}}
+
+# Regenerate every committed .dif under data/dif-examples/ from its
+# data/testdata/ source via `just convert` (the shipped triplet + 2-theme
+# palette). .drawio inputs reuse the cached PNG render under out/drawio-png/
+# (run `just drawio-setup` once if a render is needed). Run `just py` first.
+# The .dif examples are LFS-tracked; `git add` re-cleans them to pointers.
+regen-examples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    for src in data/testdata/drawio/*.drawio; do
+        just convert "$src" "data/dif-examples/drawio/$(basename "${src%.drawio}").dif"
+    done
+    for src in data/testdata/usc-sipi-misc/*.tiff; do
+        just convert "$src" "data/dif-examples/usc-sipi-misc/$(basename "${src%.tiff}").dif"
+    done
+    n=(data/dif-examples/*/*.dif); echo "regenerated ${#n[@]} examples"
+
 # --- VSCodium / VS Code extension -----------------------------------------
 # The extension reuses the wasip1 decoder built by `just wasm` (all 8 codecs)
 # plus its wasi shim, so the custom editor decodes the same files the browser

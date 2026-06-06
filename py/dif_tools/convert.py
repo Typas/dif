@@ -112,9 +112,9 @@ def convert_file(
     input_path: str | Path,
     output_path: str | Path | None = None,
     strategy: str = "arithmetic",
-    codec: str = "zstd-3",
-    palette_codec: str = "store",
-    frame_codec: str = "store",
+    codec: str = "store",
+    palette_codec: str = "zstd-16",
+    frame_codec: str = "zstd-10",
     raw: bool = False,
     index_width: str = "auto",
     workers: int = 1,
@@ -122,9 +122,11 @@ def convert_file(
     """Convert an image to ``.dif`` (or ``.difr`` if ``raw``); returns the bytes.
 
     ``codec`` is the outer whole-body codec; ``palette_codec``/``frame_codec``
-    compress the palette and per-frame sections (default ``"store"`` for the
-    random-access layout). Each is one of the study's variant strings (e.g.
-    ``"zstd-3"``, ``"brotli-11"``, ``"lz4-fast1"``); see :data:`dif.CodecName`.
+    compress the palette and per-frame sections. The defaults are the shipped
+    triplet — outer ``"store"`` (keeps frames seekable for random-access /
+    low-memory decode), palette ``"zstd-16"``, frame ``"zstd-10"``. Each is one
+    of the study's variant strings (e.g. ``"zstd-3"``, ``"brotli-11"``,
+    ``"lz4-fast1"``); see :data:`dif.CodecName`.
     ``index_width`` is ``"auto"``/``"8"``/``"16"`` (see :func:`dif_image_from_array`).
     ``workers`` > 1 spreads frame compression across threads (inter-frame parallel,
     in-frame split only when frames < workers); default 1 keeps it serial.

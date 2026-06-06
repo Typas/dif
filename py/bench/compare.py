@@ -27,20 +27,14 @@ from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import compute_m, speed
 
-# The study's outer codec variants (docs/plan.md). `DIF_BASELINE` names the shipped
-# default codec; `REL_REF` is the `rel` reference column — every format's size is
-# reported relative to it (PNG, the universal lossless baseline).
-DIF_CODECS: tuple[str, ...] = (
-    "zstd-3",
-    "zstd-10",
-    "zstd-22",
-    "brotli-5",
-    "brotli-11",
-    "libdeflate-6",
-    "lz4-fast1",
-    "lzav-1",
-)
-DIF_BASELINE = "zstd-3"
+# `DIF_TRIPLET` is the shipped encode config — (outer, palette, frame): outer
+# `store` keeps frames seekable for random-access / low-memory decode, palette
+# `zstd-16`, frame `zstd-10`. It is the default `bench formats` DIF row; sweep any
+# section at runtime with the lzbench-style `--dif-*codecs` flags (no static study
+# set — the flags build any sweep or matrix). `REL_REF` is the `rel` reference
+# column — every format's size is relative to it (PNG, the universal lossless
+# baseline).
+DIF_TRIPLET: tuple[str, str, str] = ("store", "zstd-16", "zstd-10")
 REL_REF = "png"  # `rel` column reference format
 
 # Compact codec abbreviations for the DIF row labels.
@@ -141,9 +135,9 @@ def _measure(
 def compare_image(
     path: str | Path,
     repeats: int = 3,
-    dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
-    palette_codecs: tuple[str, ...] | list[str] | None = None,
-    frame_codecs: tuple[str, ...] | list[str] | None = None,
+    dif_codecs: tuple[str, ...] | list[str] = (DIF_TRIPLET[0],),
+    palette_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[1],),
+    frame_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[2],),
     stream: bool = False,
     numthreads: int = 1,
     index_widths: tuple[str, ...] | list[str] = ("auto",),
@@ -270,12 +264,13 @@ def compare_image(
     for iw in index_widths:
         bits, note = dif_meta(iw)
 
-        # Headline row: the shipped default (zstd-3) carrying *both* themes
-        # (light + dark) — the real `.dif` product, not directly size-comparable to
-        # the single-image formats below.
+        # Headline row: the shipped triplet (store / zstd-16 / zstd-10) carrying
+        # *both* themes (light + dark) — the real `.dif` product, not directly
+        # size-comparable to the single-theme formats below. `-2p` = 2-palette.
+        outer, palette, frame = DIF_TRIPLET
         emit(
-            f"{_dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, bits)}-2t",
-            dif_enc("arithmetic", DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, iw),
+            f"{_dif_label(outer, palette, frame, bits)}-2p",
+            dif_enc("arithmetic", outer, palette, frame, iw),
             dif_dec,
             None,
             note,

@@ -15,7 +15,7 @@ from pathlib import Path
 from . import native
 from . import compare as cmp
 from .codecs import select_codecs
-from .compare import DIF_CODECS, compare_image
+from .compare import DIF_TRIPLET, compare_image
 from .runner import (
     TSV_HEADER,
     format_stats_table,
@@ -167,27 +167,27 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument(
         "--dif-codecs",
         type=_codecs,
-        default=list(DIF_CODECS),
+        default=[DIF_TRIPLET[0]],
         metavar="lzbench-spec",
         help="outer DIF codec variants, lzbench `-e` syntax: `/` separates codecs, "
-        "`,` enumerates levels of the preceding family (default: the study set), "
-        "e.g. --dif-codecs=zstd,3/brotli,5,11/store",
+        f"`,` enumerates levels of the preceding family (default: {DIF_TRIPLET[0]}, "
+        "the shipped triplet's outer), e.g. --dif-codecs=zstd,3/brotli,5,11/store",
     )
     f.add_argument(
         "--dif-palette-codecs",
         type=_codecs,
-        default=None,
+        default=[DIF_TRIPLET[1]],
         metavar="lzbench-spec",
-        help="palette-section codecs, same `/`,`,` syntax as --dif-codecs (default: "
-        "inherit the outer codec); a list runs the cartesian product with --dif-codecs",
+        help="palette-section codecs, same `/`,`,` syntax as --dif-codecs "
+        f"(default: {DIF_TRIPLET[1]}); a list runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
         "--dif-frame-codecs",
         type=_codecs,
-        default=None,
+        default=[DIF_TRIPLET[2]],
         metavar="lzbench-spec",
-        help="frame-section codecs, same `/`,`,` syntax as --dif-codecs (default: "
-        "inherit the outer codec); a list runs the cartesian product with --dif-codecs",
+        help="frame-section codecs, same `/`,`,` syntax as --dif-codecs "
+        f"(default: {DIF_TRIPLET[2]}); a list runs the cartesian product with --dif-codecs",
     )
     f.add_argument(
         "--index-width",

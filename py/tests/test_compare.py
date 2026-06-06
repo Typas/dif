@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image as PILImage
 
 from bench.compare import (
-    DIF_BASELINE,
+    DIF_TRIPLET,
     REL_REF,
     TSV_HEADER,
     _abbr,
@@ -37,11 +37,14 @@ def test_compare_image_covers_png_and_dif(tmp_path):
     png = by_name[REL_REF]
     assert png.available and png.lossless and png.size > 0
 
-    # The shipped 2-theme headline row + the requested single-theme codec rows.
-    # The toy image has 3 colors, so it resolves to the 8-bit profile (-8b).
-    base = _dif_label(DIF_BASELINE, DIF_BASELINE, DIF_BASELINE, 8)  # "dif-zst3-8b"
-    assert f"{base}-2t" in by_name
-    assert by_name[base].available and by_name[base].size > 0
+    # The shipped 2-palette headline row (the decided triplet) + the requested
+    # single-theme codec rows. The toy image has 3 colors -> 8-bit profile (-8b).
+    headline = _dif_label(*DIF_TRIPLET, 8)  # "dif-st-zst16-zst10-8b"
+    assert f"{headline}-2p" in by_name
+    # Each requested outer codec becomes a single-theme row; palette/frame default
+    # to the triplet's zstd-16 / zstd-10.
+    row = _dif_label("zstd-3", "zstd-16", "zstd-10", 8)
+    assert by_name[row].available and by_name[row].size > 0
 
     # Every available row that claims lossless must round-trip losslessly.
     assert all(r.lossless for r in rows if r.available)
@@ -81,7 +84,7 @@ def test_unavailable_codec_is_annotated_not_raised(tmp_path):
     # back available=False with a note instead of bubbling an exception.
     p = _toy_png(tmp_path / "d.png")
     rows = compare_image(p, repeats=1, dif_codecs=("not-a-codec",))
-    bad = next(r for r in rows if r.name == "dif-not-a-codec-8b")
+    bad = next(r for r in rows if r.name == "dif-not-a-codec-zst16-zst10-8b")
     assert not bad.available and bad.note
 
 

@@ -1,27 +1,29 @@
 """Regenerate web/demo/flowchart.dif for the current `.dif` container format.
 
-The wasm viewer loads `flowchart.dif`. The v3 format is a clean break from v2
-(new 64-byte container, constant-width indices, no grayscale/varint), so the
-committed demo asset can't be header-rewritten — it must be rebuilt from its
-pixels. This script decodes the legacy v2 body inline (brotli + the v2 layout),
-reconstructs both themes' palettes, and re-emits a v3 `.dif` with the same image.
+The wasm viewer loads `flowchart.dif`. This script decodes the demo down to
+pixels — from either a legacy v2 body (brotli + the v2 layout) or the current v3
+container (via the decoder's `render`) — recolors the largest blue block red, and
+re-emits a v3 `.dif` with the shipped triplet (outer `store`, palette `zstd-16`,
+frame `zstd-10`) and a derived dark theme.
 
-Idempotent: a file already in v3 (`DIF3`) is verified and left as-is.
-Run via `just regen-demo`.
+Idempotent: once the red block is present the recolor is skipped, so re-running
+only re-encodes (e.g. after a container-format bump) without painting a second
+block. Run via `just regen-demo`.
 """
 
 from __future__ import annotations
 
 import struct
+from collections import deque
 from pathlib import Path
 
 import dif
 
 _DIF = Path(__file__).resolve().parent.parent / "web" / "demo" / "flowchart.dif"
 
-# v3 theme capability bits (mirror dif_core::abilities).
-_ABILITY_LIGHT = 1
-_ABILITY_DARK = 2
+# The red one blue block is repainted to (RGBA8). Doubles as the idempotency
+# marker: if a pixel already holds it, the recolor has run before.
+_RED = (210, 38, 30, 255)
 
 
 def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
@@ -42,10 +44,8 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
     return value, pos
 
 
-def _decode_v2(
-    blob: bytes,
-) -> tuple[int, int, list[list[tuple[int, int, int, int]]], list[int]]:
-    """Decode a legacy v2 indexed `.dif`; return (w, h, palettes, frame0_indices)."""
+def _decode_v2_light(blob: bytes) -> tuple[int, int, bytearray]:
+    """Decode a legacy v2 indexed `.dif` to the light theme's RGBA8 pixels."""
     import brotli
 
     if blob[5] != 2:
@@ -73,40 +73,86 @@ def _decode_v2(
     pos += 2 * frame_count  # frame_delays u16
 
     color_count, pos = _read_varint(body, pos)
-    palettes: list[list[tuple[int, int, int, int]]] = []
-    for _ in range(theme_count):
-        pal: list[tuple[int, int, int, int]] = []
-        for _ in range(color_count):
-            pal.append((body[pos], body[pos + 1], body[pos + 2], body[pos + 3]))
-            pos += 4
-        palettes.append(pal)
+    light: list[tuple[int, int, int, int]] = []
+    for _ in range(color_count):  # theme 0 (light) palette; the rest are skipped
+        light.append((body[pos], body[pos + 1], body[pos + 2], body[pos + 3]))
+        pos += 4
+    pos += 4 * color_count * (theme_count - 1)
 
     px = width * height
-    indices: list[int] = []
-    for _ in range(px):
+    rgba = bytearray(px * 4)
+    for i in range(px):
         idx, pos = _read_varint(body, pos)
-        indices.append(idx)
-    return width, height, palettes, indices
+        rgba[4 * i : 4 * i + 4] = bytes(light[idx])
+    return width, height, rgba
+
+
+def _load_light_rgba(blob: bytes) -> tuple[int, int, bytearray]:
+    """Decode the demo (v2 or v3) to its light theme's RGBA8 pixels."""
+    if blob[:4] == b"DIF3":
+        img = dif.Image.from_dif(blob)
+        w, h, rgba = img.render("light", (255, 255, 255), 0)
+        return w, h, bytearray(rgba)
+    if blob[:4] == b"DIF1":
+        return _decode_v2_light(blob)
+    raise SystemExit(f"{_DIF} is not a known .dif container")
+
+
+def _is_blue(r: int, g: int, b: int, a: int) -> bool:
+    """A saturated, opaque blue fill pixel (block fill, not antialiased edges)."""
+    return a > 0 and b > 110 and b > r + 35 and b > g + 35
+
+
+def _recolor_largest_blue_block(w: int, h: int, rgba: bytearray) -> bool:
+    """Repaint the largest 4-connected blue region to `_RED` in place. Returns
+    False (no change) when the red is already present — keeps the regen idempotent."""
+    px = w * h
+    if any(tuple(rgba[4 * i : 4 * i + 4]) == _RED for i in range(px)):
+        return False
+    blue = [_is_blue(*rgba[4 * i : 4 * i + 4]) for i in range(px)]
+
+    seen = bytearray(px)
+    best: list[int] = []
+    for s in range(px):
+        if not blue[s] or seen[s]:
+            continue
+        comp: list[int] = []
+        q = deque([s])
+        seen[s] = 1
+        while q:
+            p = q.popleft()
+            comp.append(p)
+            r, c = divmod(p, w)
+            for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                if 0 <= nr < h and 0 <= nc < w:
+                    n = nr * w + nc
+                    if blue[n] and not seen[n]:
+                        seen[n] = 1
+                        q.append(n)
+        if len(comp) > len(best):
+            best = comp
+    if not best:
+        raise SystemExit("no blue block found to recolor")
+    for p in best:
+        rgba[4 * p : 4 * p + 4] = bytes(_RED)
+    return True
 
 
 def regen() -> None:
     blob = _DIF.read_bytes()
-    if blob[:4] == b"DIF3":
-        dif.Image.from_dif(blob)  # verify it still decodes
-        print(f"{_DIF.name}: already v3 ({len(blob)} bytes) — no change")
-        return
-    if blob[:4] != b"DIF1":
-        raise SystemExit(f"{_DIF} is not a known .dif container")
+    w, h, rgba = _load_light_rgba(blob)
+    changed = _recolor_largest_blue_block(w, h, rgba)
 
-    width, height, palettes, indices = _decode_v2(blob)
-    base = [(_ABILITY_LIGHT, (255, 255, 255)), (_ABILITY_DARK, (0, 0, 0))]
-    themes = base[: len(palettes)]
-    img = dif.Image.indexed(width, height, 8, themes, palettes, [indices])
-
-    new = img.to_dif("brotli-11")
+    img = dif.Image.indexed_from_rgba8(w, h, bytes(rgba), None)
+    img.add_dark_theme("arithmetic")
+    new = img.to_dif("store", "zstd-16", "zstd-10")
     dif.Image.from_dif(new)  # verify the new decoder reads it before writing
     _DIF.write_bytes(new)
-    print(f"{_DIF.name}: rebuilt v2 -> v3 ({len(blob)} -> {len(new)} bytes)")
+
+    note = (
+        "recolored largest blue block red" if changed else "red block already present"
+    )
+    print(f"{_DIF.name}: rebuilt -> v3 ({len(blob)} -> {len(new)} bytes), {note}")
 
 
 if __name__ == "__main__":
