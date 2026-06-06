@@ -6,7 +6,7 @@
 
 use std::os::raw::{c_int, c_long, c_uchar};
 
-extern "C" {
+unsafe extern "C" {
     fn kanzishim_bound(srclen: usize) -> usize;
     fn kanzishim_compress(
         src: *const c_uchar,
@@ -24,7 +24,7 @@ extern "C" {
 }
 
 /// Upper bound on the compressed size of `srclen` bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kanzi_bound(srclen: usize) -> usize {
     unsafe { kanzishim_bound(srclen) }
 }
@@ -34,7 +34,7 @@ pub extern "C" fn kanzi_bound(srclen: usize) -> usize {
 ///
 /// # Safety
 /// `src`/`dst` must be valid for `srclen`/`dstcap` bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kanzi_compress(
     src: *const c_uchar,
     srclen: usize,
@@ -42,7 +42,9 @@ pub unsafe extern "C" fn kanzi_compress(
     dstcap: usize,
     level: c_int,
 ) -> c_long {
-    kanzishim_compress(src, srclen, dst, dstcap, level)
+    unsafe {
+        kanzishim_compress(src, srclen, dst, dstcap, level)
+    }
 }
 
 /// Decompress `src[..srclen]` into `dst[..dstcap]`. Returns the decompressed
@@ -50,12 +52,14 @@ pub unsafe extern "C" fn kanzi_compress(
 ///
 /// # Safety
 /// `src`/`dst` must be valid for `srclen`/`dstcap` bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kanzi_decompress(
     src: *const c_uchar,
     srclen: usize,
     dst: *mut c_uchar,
     dstcap: usize,
 ) -> c_long {
+    unsafe {
     kanzishim_decompress(src, srclen, dst, dstcap)
+    }
 }
