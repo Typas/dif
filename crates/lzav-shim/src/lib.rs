@@ -5,7 +5,7 @@
 
 use std::os::raw::{c_int, c_void};
 
-extern "C" {
+unsafe extern "C" {
     fn lzavshim_bound(srclen: c_int) -> c_int;
     fn lzavshim_compress(
         src: *const c_void,

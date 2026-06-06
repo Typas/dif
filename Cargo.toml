@@ -7,8 +7,8 @@ members = ["crates/dif-core"]
 exclude = ["crates/dif-py", "crates/dif-wasm", "crates/kanzi-shim", "crates/lzav-shim", "crates/libbsc-shim"]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]

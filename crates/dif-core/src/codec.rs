@@ -18,7 +18,7 @@
 use alloc::vec::Vec;
 
 use crate::error::{DifError, Result};
-use crate::format::{self, align16, Header, HEADER_LEN};
+use crate::format::{self, HEADER_LEN, Header, align16};
 use crate::{DifImage, Frame, IndexWidth};
 
 /// Default in-frame split job size (`J`): the controlled per-job byte target the
@@ -752,7 +752,7 @@ pub fn from_difr(bytes: &[u8]) -> Result<DifImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{abilities, ColorDepth, IndexWidth, Rgba, Theme, ThemeTag};
+    use crate::{ColorDepth, IndexWidth, Rgba, Theme, ThemeTag, abilities};
     use alloc::vec;
 
     fn sample(depth: ColorDepth, iw: IndexWidth) -> DifImage {

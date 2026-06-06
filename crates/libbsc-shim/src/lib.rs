@@ -7,7 +7,7 @@
 
 use std::os::raw::{c_int, c_uchar};
 
-extern "C" {
+unsafe extern "C" {
     fn bscshim_bound(n: c_int) -> c_int;
     fn bscshim_compress(
         src: *const c_uchar,

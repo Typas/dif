@@ -237,7 +237,7 @@ pub(crate) fn read_frame_bitmap(bytes: &[u8], px: usize, width: IndexWidth) -> R
         }
         // An unsupported width forged into the flags: reject with its bit count.
         IndexWidth::Bit32 | IndexWidth::Bit64 => {
-            return Err(DifError::BadIndexWidth((width.bytes() * 8) as u8))
+            return Err(DifError::BadIndexWidth((width.bytes() * 8) as u8));
         }
     }
     Ok(out)

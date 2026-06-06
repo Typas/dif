@@ -1,7 +1,7 @@
 [package]
 name = "libbsc-shim"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 # Wrapper code is MIT; the vendored libbsc sources under vendor/ are Apache-2.0.
 license = "Apache-2.0"
 description = "Static C++-shim wrapping IlyaGrebnov/libbsc (BWT) for dif-core's native codec path."

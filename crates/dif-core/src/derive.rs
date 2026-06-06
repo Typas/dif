@@ -54,11 +54,7 @@ impl Strategy {
 /// Tone-compress lightness toward the dark band (no flip): a light color lands
 /// mid-dark (visible), a dark color stays dark. Split at `L = 0.5`.
 fn dark_lightness(l: f64) -> f64 {
-    if l < 0.5 {
-        l / 2.0
-    } else {
-        l / 2.0 + 0.25
-    }
+    if l < 0.5 { l / 2.0 } else { l / 2.0 + 0.25 }
 }
 
 /// Arithmetic OKLab derivation of one color's RGB (alpha handled by the caller).

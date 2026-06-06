@@ -34,10 +34,10 @@ pub mod format;
 pub mod quantize;
 
 pub use codec::{
-    from_dif, from_dif_workers, from_difr, to_dif, to_dif_workers, to_difr, Codec, CodecId,
+    Codec, CodecId, from_dif, from_dif_workers, from_difr, to_dif, to_dif_workers, to_difr,
 };
 #[cfg(feature = "encode")]
-pub use derive::{derive_dark_base_color, derive_dark_palette, Strategy};
+pub use derive::{Strategy, derive_dark_base_color, derive_dark_palette};
 pub use error::{DifError, Result};
 
 /// Theme capability bits (the low 3 bits of a theme's `abilities` byte). The top
@@ -454,8 +454,8 @@ pub fn indexed_from_rgba8(
     let (subst, source_colors): (Option<ColorMap<u32, u32>>, Option<u64>) = if map.len() > capacity
     {
         return Err(DifError::Invalid(
-                "palette exceeds the index width capacity (build with the `encode` feature to quantize)",
-            ));
+            "palette exceeds the index width capacity (build with the `encode` feature to quantize)",
+        ));
     } else {
         (None, None)
     };
@@ -638,10 +638,12 @@ mod tests {
         assert!(img.palettes[0].len() <= 256, "palette must fit 8-bit");
         assert_eq!(q, Some(400), "reports pre-quantization color count");
         // Every emitted index is in range (also asserted by `validate`).
-        assert!(img.frames[0]
-            .indices
-            .iter()
-            .all(|&i| (i as usize) < img.palettes[0].len()));
+        assert!(
+            img.frames[0]
+                .indices
+                .iter()
+                .all(|&i| (i as usize) < img.palettes[0].len())
+        );
         // Deterministic: same bytes + same metadata on a second run.
         let (img2, q2) = indexed_from_rgba8(side, side, &rgba, Some(IndexWidth::Bit8)).unwrap();
         assert_eq!(to_difr(&img).unwrap(), to_difr(&img2).unwrap());
