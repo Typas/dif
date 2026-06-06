@@ -100,7 +100,11 @@ py:
 # deps need (zstd/lzav). `cargo-zigbuild` + `ziglang` (the zig binary wheel) come
 # from the uv dev env; `wasm-bindgen-cli` is version-pinned to the wasm-bindgen
 # crate so the JS glue matches the .wasm.
-# One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned wasm-bindgen-cli).
+# One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned
+# wasm-bindgen-cli). For the -Oz pass (dropped with wasm-pack) install binaryen
+# from the distro: `dnf install binaryen` (Fedora) or `apt install binaryen`
+# (Debian/Ubuntu) — the `cargo install wasm-opt` crate vendors LLVM and fails to
+# link. The `wasm` recipe skips -Oz if wasm-opt is absent.
 wasm-setup:
     rustup target add wasm32-wasip1
     uv sync
@@ -117,6 +121,13 @@ wasm:
         --manifest-path crates/dif-wasm/Cargo.toml
     wasm-bindgen target/wasm32-wasip1/release/dif_wasm.wasm \
         --target web --out-dir "$PWD/dist/pkg"
+    command -v wasm-opt >/dev/null \
+        && wasm-opt -Oz --strip-debug --strip-producers \
+            --enable-bulk-memory --enable-bulk-memory-opt --enable-sign-ext \
+            --enable-mutable-globals --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            "$PWD/dist/pkg/dif_wasm_bg.wasm" -o "$PWD/dist/pkg/dif_wasm_bg.wasm" \
+        || echo "skip wasm-opt: not installed (run just wasm-setup)"
 
 # Load dist/pkg + the wasi shim and decode web/demo/flowchart.dif. Node has no
 # import maps, so a resolve hook wires the glue's bare `wasi_snapshot_preview1`

@@ -2,9 +2,13 @@
   "name": "dif-viewer",
   "displayName": "DIF Viewer",
   "description": "Theme-aware viewer for .dif (Diagram Image Format) files.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
-  "publisher": "adsp-final",
+  "publisher": "typas",
+  "repository": {
+      "type": "git",
+      "url": "git+https://github.com/Typas/dif.git"
+  },
   "engines": { "vscode": "^1.84.0" },
   "categories": ["Visualization"],
   "main": "./out/extension.js",

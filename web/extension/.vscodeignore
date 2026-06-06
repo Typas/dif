@@ -1,0 +1,20 @@
+# Files excluded from the packaged .vsix.
+# Ship: out/, media/, package.json, README.md, LICENSE.
+
+# Sources — compiled into out/ via `tsc`.
+src/**
+tsconfig.json
+
+# Dev tooling — no runtime deps (only devDependencies).
+node_modules/**
+package-lock.json
+pnpm-lock.yaml
+
+# Build/meta artifacts.
+.gitignore
+.vscodeignore
+**/*.vsix
+**/*.map
+
+# Type decls — not needed at runtime.
+**/*.d.ts
