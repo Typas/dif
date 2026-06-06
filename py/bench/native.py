@@ -12,7 +12,13 @@ at build).
   :func:`build_kanzi` ``cargo build``s the shim; levels 1 and 2 are exposed.
 - **libbsc** (DIF family 3): the C/C++ sources + extern-"C" wrapper used by
   ``dif-core``'s ``bsc`` codec (the ``crates/libbsc-shim`` submodule).
-  :func:`build_libbsc` compiles them into a ``.so``; levels 1–3.
+  :func:`build_libbsc` compiles them into a ``.so``. Exposed through the shim's
+  parameterized ``_ex`` entry point so a spec mirrors the ``bsc`` CLI knobs:
+  ``b<MB>`` block size (``-b``), ``m<n>`` block sorter (``-m``: 0=BWT, 3..8=ST),
+  ``e<n>`` entropy coder (``-e``: 0=fast, 1=static, 2=adaptive). Codec names are
+  ``libbsc-b25m0e1`` etc.; :func:`make_libbsc` builds any such spec on demand.
+  ``m7``/``m8`` (ST7/ST8) are GPU-only: ``bench setup --cuda`` builds them (nvcc
+  + an NVIDIA GPU), otherwise they're reported unavailable up front.
 
 Run ``python -m bench setup`` to build them.
 """
@@ -20,6 +26,7 @@ Run ``python -m bench setup`` to build them.
 from __future__ import annotations
 
 import ctypes
+import re
 import shutil
 import subprocess
 import tempfile
@@ -52,7 +59,28 @@ _LIBBSC_ROOT = _LIBBSC_DIR / "vendor/libbsc"  # submodule repo root
 _LIBBSC_VENDOR = _LIBBSC_ROOT / "libbsc"  # source tree inside it
 _LIBBSC_WRAPPER = _LIBBSC_DIR / "wrapper.cpp"
 _LIBBSC_SO = _NATIVE_DIR / "libbscshim.so"
-_LIBBSC_LEVELS = (1, 2, 3)  # QLFC coder: fast / static / adaptive
+
+# --- libbsc -b/-m/-e spec parsing (mirrors bsc.cpp's ProcessSwitch) ----------
+# A spec token is `b<MB>m<n>e<n>` (e.g. b25m0e1). The maps turn the bsc CLI's
+# -m / -e digits into the LIBBSC_* enum values the shim forwards to bsc_compress.
+_BME_RE = re.compile(r"^b(\d+)m(\d+)e(\d+)$")
+# -m digit -> LIBBSC_BLOCKSORTER_* enum (see libbsc.h / bsc.cpp ProcessSwitch):
+# m0 = BWT (enum 1); m3..m8 = ST3..ST8 (enum 3..8, identity). ST7/ST8 compile but
+# need CUDA at runtime, so they're accepted here and caught by the probe.
+_BSC_SORTER = {0: 1, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8}
+# -e digit -> LIBBSC_CODER_* enum. NOT the identity: the enum is STATIC=1,
+# ADAPTIVE=2, FAST=3, but the CLI's -e digit order is fast/static/adaptive, so
+# e0->FAST(3), e1->STATIC(1), e2->ADAPTIVE(2). Matches bsc.cpp's `-e` switch.
+_BSC_CODER = {0: 3, 1: 1, 2: 2}
+# LIBBSC_FEATURE_* bits passed to bsc_compress (see libbsc.h). FASTMODE is always
+# on (as in the single-block path); CUDA is OR'd in only for ST7/ST8, the GPU-only
+# sort transforms -- and only matters if the .so was built with `--cuda`.
+_BSC_FEATURE_FASTMODE = 1
+_BSC_FEATURE_CUDA = 8
+_BSC_CUDA_SORTERS = (7, 8)  # -m7/-m8 = ST7/ST8: require a CUDA build + an NVIDIA GPU
+# Default registry set (bare `bsc`/`libbsc` selects these): the three coders over
+# a BWT block at the CLI's default 25 MB -- the old levels 1/2/3 by their specs.
+_LIBBSC_DEFAULTS = ("b25m0e0", "b25m0e1", "b25m0e2")
 # C++ sources (mirrors crates/libbsc-shim/build.rs); libsais.c built separately as C.
 _LIBBSC_CPP = (
     "adler32/adler32.cpp",
@@ -211,13 +239,28 @@ def _kanzi_codecs() -> list["Codec"]:
     return [make(1), make(2)]
 
 
-def build_libbsc() -> bool:  # pragma: no cover
+# GPU sort-transform sources (compiled with nvcc only for a `--cuda` build).
+_LIBBSC_CU = ("st/st.cu", "bwt/libcubwt/libcubwt.cu")
+
+
+def build_libbsc(cuda: bool = False) -> bool:  # pragma: no cover
     """Compile libbsc + the extern-"C" wrapper into a ctypes shared lib.
 
     Sources come from the ``crates/libbsc-shim/vendor/libbsc`` git submodule (run
     ``git submodule update --init`` first; no network at build); mirrors that
     crate's ``build.rs``. No-cover: needs a C and C++ compiler; exercised by
     ``bench setup``.
+
+    With ``cuda=True`` the GPU sort transforms (``-m7``/``-m8`` = ST7/ST8) are
+    enabled: the ``.cu`` kernels are built with ``nvcc``, every C++ TU gets
+    ``-DLIBBSC_CUDA_SUPPORT``, and -- because libbsc's CUDA host locks need it
+    (``CMakeLists.txt`` hard-requires OpenMP for CUDA) -- OpenMP is turned on too,
+    with the CUDA runtime linked at the final step. OpenMP is a *system* package
+    the user must install (``<omp.h>`` + libgomp/libomp via the toolchain, e.g.
+    ``apt install libomp-dev`` or a gcc with libgomp); we don't vendor it. Returns
+    ``False`` (so setup reports FAILED) if ``nvcc`` isn't on PATH or the OpenMP/
+    CUDA toolchain is incomplete. The default CPU build leaves CUDA/OpenMP
+    undefined, identical to what dif-core links.
     """
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
@@ -225,8 +268,35 @@ def build_libbsc() -> bool:  # pragma: no cover
         return False
     if not (_LIBBSC_VENDOR / "libbsc.h").exists():
         return False
+    nvcc = shutil.which("nvcc") if cuda else None
+    if cuda and nvcc is None:
+        return False
     _NATIVE_DIR.mkdir(exist_ok=True)
     includes = [f"-I{_LIBBSC_ROOT}", f"-I{_LIBBSC_VENDOR}"]
+    # CUDA: LIBBSC_CUDA_SUPPORT turns on the GPU dispatch in st.cpp/bwt.cpp, and
+    # libbsc's CUDA host locks require OpenMP (CMake hard-requires it). OpenMP is a
+    # *system* dependency: `-fopenmp` needs the toolchain's <omp.h> + libgomp/libomp
+    # installed. LIBBSC_OPENMP_SUPPORT (not LIBBSC_OPENMP) is the right macro --
+    # platform.h then includes <omp.h> when -fopenmp has defined _OPENMP, and
+    # defines LIBBSC_OPENMP itself. Defining LIBBSC_OPENMP directly skips the header.
+    # bwt.cpp calls libsais's `*_omp` variants under OpenMP, so LIBSAIS_OPENMP must
+    # be defined when compiling both the C++ TUs (to see the declarations) and
+    # libsais.c itself (to define them) -- mirrors CMake's PRIVATE LIBSAIS_OPENMP.
+    cxx_cuda = (
+        [
+            "-DLIBBSC_CUDA_SUPPORT",
+            "-DLIBBSC_OPENMP_SUPPORT",
+            "-DLIBSAIS_OPENMP",
+            "-fopenmp",
+        ]
+        if cuda
+        else []
+    )
+    sais_cuda = ["-DLIBSAIS_OPENMP", "-fopenmp"] if cuda else []
+    cuda_lib = None
+    if nvcc is not None:  # set iff cuda; the check narrows nvcc to str for ty
+        cuda_home = Path(nvcc).resolve().parent.parent  # .../bin/nvcc -> CUDA root
+        cuda_lib = cuda_home / "lib64"
     try:
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -239,6 +309,7 @@ def build_libbsc() -> bool:  # pragma: no cover
                     cc,
                     "-O3",
                     "-fPIC",
+                    *sais_cuda,
                     "-c",
                     str(_LIBBSC_VENDOR / "bwt/libsais/libsais.c"),
                     "-o",
@@ -249,6 +320,40 @@ def build_libbsc() -> bool:  # pragma: no cover
             )
             objs.append(str(sais_o))
 
+            # CUDA kernels via nvcc (-arch=native targets the build host's GPU,
+            # matching the libbsc CMake default). -Xcompiler forwards host flags.
+            if nvcc is not None:  # narrows nvcc to str for ty (set iff cuda)
+                for name in _LIBBSC_CU:
+                    src = _LIBBSC_VENDOR / name
+                    out = tdp / f"{src.stem}.cu.o"
+                    subprocess.run(
+                        [
+                            nvcc,
+                            "-O3",
+                            "-arch=native",
+                            "-DLIBBSC_CUDA_SUPPORT",
+                            "-DLIBBSC_OPENMP_SUPPORT",
+                            # Vendored libcubwt.cu uses cub::Max/Min, deprecated in
+                            # CUDA 12.x; silence the (cosmetic) deprecation noise on
+                            # both device (--diag-suppress) and host (-Xcompiler).
+                            "-Wno-deprecated-gpu-targets",
+                            "--diag-suppress=1444",
+                            "-Xcompiler",
+                            "-fPIC",
+                            "-Xcompiler",
+                            "-fopenmp",
+                            "-Xcompiler",
+                            "-Wno-deprecated-declarations",
+                            "-c",
+                            str(src),
+                            "-o",
+                            str(out),
+                            *includes,
+                        ],
+                        check=True,
+                    )
+                    objs.append(str(out))
+
             # libbsc C++ sources + the extern-"C" wrapper (unique basenames).
             for src in (*(_LIBBSC_VENDOR / n for n in _LIBBSC_CPP), _LIBBSC_WRAPPER):
                 out = tdp / f"{src.stem}.o"
@@ -258,6 +363,7 @@ def build_libbsc() -> bool:  # pragma: no cover
                         "-O3",
                         "-fPIC",
                         "-std=c++17",
+                        *cxx_cuda,
                         "-c",
                         str(src),
                         "-o",
@@ -268,55 +374,149 @@ def build_libbsc() -> bool:  # pragma: no cover
                 )
                 objs.append(str(out))
 
-            subprocess.run([cxx, "-shared", "-o", str(_LIBBSC_SO), *objs], check=True)
+            link = [cxx, "-shared", "-o", str(_LIBBSC_SO), *objs]
+            if cuda:
+                link += ["-fopenmp", f"-L{cuda_lib}", "-lcudart"]
+            subprocess.run(link, check=True)
         return _LIBBSC_SO.exists()
     except Exception:
         return False
 
 
-def _libbsc_codecs() -> list["Codec"]:
+_libbsc_lib = None  # cached CDLL handle (the .so is loaded at most once)
+
+
+def _libbsc_load() -> "ctypes.CDLL | None":
+    """Load + wire the libbsc shim's parameterized ``_ex`` entry points, once.
+
+    ``None`` if the shim isn't built (``bench setup`` not run, or no compiler).
+    """
+    global _libbsc_lib
+    if _libbsc_lib is not None:
+        return _libbsc_lib
     if not _LIBBSC_SO.exists():
-        return []
+        return None
     lib = ctypes.CDLL(str(_LIBBSC_SO))
-    lib.bscshim_bound.restype = ctypes.c_int
-    lib.bscshim_bound.argtypes = [ctypes.c_int]
-    lib.bscshim_compress.restype = ctypes.c_int
-    lib.bscshim_compress.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_int,
-        ctypes.c_void_p,
-        ctypes.c_int,
-        ctypes.c_int,
+    lib.bscshim_bound_ex.restype = ctypes.c_int
+    lib.bscshim_bound_ex.argtypes = [ctypes.c_int, ctypes.c_int]
+    lib.bscshim_compress_ex.restype = ctypes.c_int
+    lib.bscshim_compress_ex.argtypes = [
+        ctypes.c_void_p,  # src
+        ctypes.c_int,  # srclen
+        ctypes.c_void_p,  # dst
+        ctypes.c_int,  # dstcap
+        ctypes.c_int,  # blockBytes
+        ctypes.c_int,  # blockSorter (LIBBSC_* enum)
+        ctypes.c_int,  # coder (LIBBSC_* enum)
+        ctypes.c_int,  # features (LIBBSC_FEATURE_* bitmask)
     ]
-    lib.bscshim_decompress.restype = ctypes.c_int
-    lib.bscshim_decompress.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_int,
-        ctypes.c_void_p,
-        ctypes.c_int,
+    lib.bscshim_decompress_ex.restype = ctypes.c_int
+    lib.bscshim_decompress_ex.argtypes = [
+        ctypes.c_void_p,  # src
+        ctypes.c_int,  # srclen
+        ctypes.c_void_p,  # dst
+        ctypes.c_int,  # rawlen
     ]
+    _libbsc_lib = lib
+    return lib
+
+
+def make_libbsc(spec: str) -> "Codec | None":
+    """Build a libbsc :class:`Codec` for a ``b<MB>m<n>e<n>`` spec (e.g. ``b25m0e1``).
+
+    ``None`` when ``spec`` isn't a b/m/e triple (so the caller can fall through to
+    other codecs) or the shim isn't built. ``ValueError`` when it *is* a b/m/e
+    spec but a field is out of range -- a clear up-front error beats a per-image
+    failure. Whether a parsed sorter actually runs (ST7/ST8 need a CUDA build +
+    GPU) is decided later by :func:`unavailable_libbsc`, not here.
+    """
+    m = _BME_RE.match(spec)
+    if m is None:
+        return None
+    block_mb, mdig, edig = (int(g) for g in m.groups())
+    if not (1 <= block_mb <= 2047):
+        raise ValueError(f"libbsc block size b{block_mb} out of range 1..2047 (MB)")
+    if mdig not in _BSC_SORTER:
+        raise ValueError(f"libbsc block sorter m{mdig} invalid (0=BWT, 3..8=ST3..ST8)")
+    if edig not in _BSC_CODER:
+        raise ValueError(f"libbsc coder e{edig} invalid (0=fast, 1=static, 2=adaptive)")
+    sorter, coder = _BSC_SORTER[mdig], _BSC_CODER[edig]
+    # ST7/ST8 only run on the GPU, so request the CUDA feature for them; harmless
+    # (ignored) on a non-CUDA build, where the probe then reports them unavailable.
+    features = _BSC_FEATURE_FASTMODE
+    if mdig in _BSC_CUDA_SORTERS:
+        features |= _BSC_FEATURE_CUDA
+    block_bytes = block_mb * 1024 * 1024
+    lib = _libbsc_load()
+    if lib is None:
+        return None
 
     from .codecs import Codec as _C
 
-    def make(level: int) -> "Codec":
-        def compress(data: bytes) -> bytes:
-            bound = lib.bscshim_bound(len(data))
-            dst = ctypes.create_string_buffer(bound)
-            n = lib.bscshim_compress(data, len(data), dst, bound, level)
-            if n < 0:
-                raise RuntimeError(f"libbsc compress failed ({n})")
-            return dst.raw[:n]
+    def compress(data: bytes) -> bytes:
+        bound = lib.bscshim_bound_ex(len(data), block_bytes)
+        dst = ctypes.create_string_buffer(bound)
+        n = lib.bscshim_compress_ex(
+            data, len(data), dst, bound, block_bytes, sorter, coder, features
+        )
+        if n < 0:
+            raise RuntimeError(f"libbsc compress failed ({n})")
+        return dst.raw[:n]
 
-        def decompress(comp: bytes, orig_len: int) -> bytes:
-            dst = ctypes.create_string_buffer(orig_len)
-            n = lib.bscshim_decompress(comp, len(comp), dst, orig_len)
-            if n < 0:
-                raise RuntimeError(f"libbsc decompress failed ({n})")
-            return dst.raw[:n]
+    def decompress(comp: bytes, orig_len: int) -> bytes:
+        dst = ctypes.create_string_buffer(max(orig_len, 1))
+        n = lib.bscshim_decompress_ex(comp, len(comp), dst, orig_len)
+        if n < 0:
+            raise RuntimeError(f"libbsc decompress failed ({n})")
+        return dst.raw[:n]
 
-        return _C(f"libbsc-{level}", compress, decompress)
+    return _C(f"libbsc-{spec}", compress, decompress)
 
-    return [make(lvl) for lvl in _LIBBSC_LEVELS]
+
+# A small, compressible buffer the probe round-trips through each libbsc codec so
+# the block sorter actually runs (an incompressible blob would be stored verbatim
+# and never exercise -m). Large enough to drive the BWT/ST path, small enough to
+# be instant.
+_LIBBSC_PROBE = b"DIF libbsc sorter availability probe \x00\x01\x02\x03" * 64
+
+
+def unavailable_libbsc(codecs: list["Codec"]) -> list[tuple[str, str]]:
+    """Round-trip the probe buffer through each ``libbsc-*`` codec and return
+    ``(name, reason)`` for any that fail -- chiefly ST7/ST8 (``-m7``/``-m8``),
+    which return LIBBSC_NOT_SUPPORTED unless the shim was built with ``--cuda``
+    *and* an NVIDIA GPU is present at runtime. Lets the CLI refuse a doomed run
+    up front instead of dying mid-benchmark.
+    """
+    out: list[tuple[str, str]] = []
+    for c in codecs:
+        if not c.name.startswith("libbsc-"):
+            continue
+        try:
+            if c.decompress(c.compress(_LIBBSC_PROBE), len(_LIBBSC_PROBE)) != (
+                _LIBBSC_PROBE
+            ):
+                raise RuntimeError("roundtrip mismatch")
+        except Exception as e:  # noqa: BLE001
+            out.append((c.name, _libbsc_unavailable_reason(c.name, e)))
+    return out
+
+
+def _libbsc_unavailable_reason(name: str, err: Exception) -> str:
+    """Friendly explanation for a failed libbsc probe; flags the CUDA-only
+    sort transforms (m7/m8) specifically, else echoes the raw shim error."""
+    m = _BME_RE.match(name.split("-", 1)[1] if "-" in name else "")
+    if m is not None and int(m.group(2)) in _BSC_CUDA_SORTERS:
+        return (
+            f"block sorter m{m.group(2)} (ST{m.group(2)}) needs a CUDA build "
+            "(`just bench-setup --cuda`) + an NVIDIA GPU"
+        )
+    return str(err)
+
+
+def _libbsc_codecs() -> list["Codec"]:
+    if _libbsc_load() is None:
+        return []
+    return [c for spec in _LIBBSC_DEFAULTS if (c := make_libbsc(spec)) is not None]
 
 
 def codecs() -> list["Codec"]:

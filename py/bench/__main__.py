@@ -109,7 +109,17 @@ def _check_codecs(parser: argparse.ArgumentParser, *specs: list[str] | None) -> 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("setup", help="build optional native codecs (lzav, kanzi, libbsc)")
+    s = sub.add_parser(
+        "setup", help="build optional native codecs (lzav, kanzi, libbsc)"
+    )
+    s.add_argument(
+        "--cuda",
+        action="store_true",
+        help="build libbsc with GPU sort transforms (ST7/ST8 = -m7/-m8). Needs "
+        "nvcc on PATH, OpenMP installed system-wide (<omp.h> + libgomp/libomp, "
+        "e.g. `apt install libomp-dev`), and an NVIDIA GPU at run time. Default: "
+        "CPU-only build",
+    )
     c = sub.add_parser("codecs", help="rank codecs over .difr by M")
     c.add_argument("images", nargs="*")
     c.add_argument("--strategy", default="arithmetic")
@@ -121,8 +131,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="lzbench-spec",
         help="select standalone codecs to bench, same lzbench `-e` syntax as "
         "--dif-codecs: `/` separates families, `,` enumerates levels (default: the "
-        "whole registry), e.g. --codecs=zstd,3,10/bsc,1,2,3/lzav. Matches the names "
-        "shown in the table (with bsc->libbsc, deflate->libdeflate aliases)",
+        "whole registry), e.g. --codecs=zstd,3,10/bsc,b25m0e0,b1m3e2/lzav. Matches "
+        "the names shown in the table (with bsc->libbsc, deflate->libdeflate "
+        "aliases). libbsc levels are bsc-CLI knobs `b<MB>m<n>e<n>`: b=block size "
+        "(-b), m=block sorter (-m 0=BWT,3..8=ST), e=coder (-e 0=fast,1=static,"
+        "2=adaptive); any combo builds on demand",
     )
     c.add_argument(
         "--numthreads",
@@ -209,8 +222,17 @@ def main(argv: list[str] | None = None) -> int:
         print("lzav shim:", "built" if lz else "FAILED (needs cc + submodule)")
         kz = native.build_kanzi()
         print("kanzi shim:", "built" if kz else "FAILED (needs cargo + submodule)")
-        bs = native.build_libbsc()
-        print("libbsc shim:", "built" if bs else "FAILED (needs cc + c++ + submodule)")
+        bs = native.build_libbsc(cuda=args.cuda)
+        if bs:
+            print("libbsc shim:", "built (CUDA)" if args.cuda else "built")
+        else:
+            need = (
+                "nvcc + system OpenMP (libgomp/libomp, e.g. apt install libomp-dev) "
+                "+ cc + c++ + submodule"
+                if args.cuda
+                else "cc + c++ + submodule"
+            )
+            print(f"libbsc shim: FAILED (needs {need})")
         return 0
 
     imgs = _images(args.images)
@@ -231,9 +253,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "codecs":
         try:
-            select_codecs(args.codecs, args.numthreads)  # validate early
+            selected = select_codecs(args.codecs, args.numthreads)  # validate early
         except ValueError as e:
             ap.error(str(e))
+        # Some libbsc block sorters (ST7/ST8 = -m7/-m8) compile but need CUDA at
+        # runtime. Probe them once and refuse up front -- like the LFS guard above
+        # -- rather than dying partway through the benchmark.
+        unavailable = native.unavailable_libbsc(selected)
+        if unavailable:
+            print("error: the following codecs are not available in this build:")
+            for name, reason in unavailable:
+                print(f"  {name}: {reason}")
+            return 1
         reports = run(imgs, args.strategy, args.repeats, args.numthreads, args.codecs)
 
         # Per-image rows -> TSV (machine-parseable detail).

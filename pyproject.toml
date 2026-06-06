@@ -63,3 +63,8 @@ show_missing = true
 [tool.ty.environment]
 # Hand-written stub for the compiled `dif` extension module.
 extra-paths = ["py/typings"]
+
+[tool.ty.src]
+# Vendored submodules (e.g. kanzi-cpp) ship their own .py files — never type-check
+# them; mirrors the black/ruff vendor excludes above.
+exclude = ["crates/*/vendor", "third_party"]

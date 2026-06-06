@@ -191,9 +191,18 @@ drawio-png IN OUT SCALE='2':
 
 # --- Python tools / tests -------------------------------------------------
 
-# Build optional native benchmark codecs (lzav + kanzi + libbsc shims).
-bench-setup:
-    uv run python -m bench setup
+# Build optional native benchmark codecs (lzav + kanzi + libbsc shims). Wipe the
+# staged shims first: when wrapper.cpp's exported symbols change (e.g. a new
+# libbsc entry point), the .so already on disk is ABI-stale and the ctypes symbol
+# wiring would crash at import -- before the rebuild ever runs. Same reasoning as
+# `just py` wiping target/maturin. A missing .so is handled gracefully (rebuilt).
+# Pass `--cuda` to build libbsc's GPU sort transforms (-m7/-m8): `just bench-setup
+# --cuda`. That build needs nvcc on PATH, OpenMP installed system-wide (<omp.h> +
+# libgomp/libomp, e.g. `apt install libomp-dev`), and an NVIDIA GPU at run time.
+# Default is CPU-only (no nvcc/OpenMP needed).
+bench-setup *ARGS:
+    rm -rf py/bench/_native
+    uv run python -m bench setup {{ARGS}}
 
 # Rank codecs over a .difr body by the M metric.
 bench-codecs *ARGS:

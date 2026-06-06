@@ -174,9 +174,22 @@ def _family(name: str) -> str:
 
 def _canon(token: str) -> str:
     """Rewrite a DIF-family token to its registry name, keeping any ``-level``
-    suffix (``bsc`` -> ``libbsc``, ``bsc-2`` -> ``libbsc-2``)."""
+    suffix (``bsc`` -> ``libbsc``, ``bsc-b25m0e1`` -> ``libbsc-b25m0e1``)."""
     fam = _family(token)
     return _FAMILY_ALIASES[fam] + token[len(fam) :] if fam in _FAMILY_ALIASES else token
+
+
+def _dynamic_libbsc(token: str) -> Codec | None:
+    """Build a libbsc codec for an on-demand ``b/m/e`` spec token that isn't a
+    pre-registered default (e.g. ``libbsc-b1m3e2``).
+
+    ``None`` when ``token`` isn't a ``libbsc-<b/m/e>`` spec or the shim isn't
+    built; propagates ``ValueError`` (from :func:`native.make_libbsc`) when the
+    token *is* a libbsc spec with an out-of-range field, so a typo errors clearly.
+    """
+    if _family(token) != "libbsc" or "-" not in token:
+        return None
+    return _native.make_libbsc(token.split("-", 1)[1])
 
 
 def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
@@ -185,8 +198,9 @@ def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
     A bare family token (``zstd``, ``libbsc``) selects every level of that family;
     a ``family-level`` token (``zstd-3``) selects that exact codec. Matching is
     against the names shown in the table, with the ``bsc``/``deflate`` aliases.
-    ``None``/empty = the whole registry. Raises ``ValueError`` naming any token
-    that matches no registered codec.
+    A ``libbsc-<b/m/e>`` token (``bsc-b1m3e2``) not among the registered defaults
+    is built on demand from the shim. ``None``/empty = the whole registry. Raises
+    ``ValueError`` naming any token that matches no codec.
     """
     if not specs:
         return all_codecs(numthreads)
@@ -199,7 +213,16 @@ def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
         if c.name in exact or _family(c.name) in families
     ]
     matched = {c.name for c in out} | {_family(c.name) for c in out}
-    missing = [orig for orig, t in zip(specs, tokens) if t not in matched]
+    missing: list[str] = []
+    for orig, t in zip(specs, tokens):
+        if t in matched:
+            continue
+        c = _dynamic_libbsc(t)  # on-demand libbsc b/m/e spec?
+        if c is not None:
+            out.append(_select(c, numthreads))
+            matched.add(t)
+        else:
+            missing.append(orig)
     if missing:
         names = ", ".join(sorted({c.name for c in _REGISTRY}))
         raise ValueError(
