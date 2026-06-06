@@ -23,7 +23,7 @@ def test_dif_convert_cli_writes_dif(tmp_path, capsys):
     out = tmp_path / "out.dif"
     rc = dif_main(["convert", str(src), str(out), "--codec", "zstd-3"])
     assert rc == 0
-    assert out.read_bytes()[:4] == b"DIF1"
+    assert out.read_bytes()[:4] == b"DIF3"
     assert "wrote" in capsys.readouterr().out
 
 
@@ -31,7 +31,7 @@ def test_dif_convert_cli_raw(tmp_path):
     src = _toy_png(tmp_path / "in.png")
     out = tmp_path / "out.difr"
     assert dif_main(["convert", str(src), str(out), "--raw"]) == 0
-    assert out.read_bytes()[:4] == b"DIFR"
+    assert out.read_bytes()[:5] == b"DIFR3"
 
 
 def test_bench_images_expands_dir(tmp_path):
@@ -89,3 +89,40 @@ def test_bench_formats_cli(tmp_path):
     assert rc == 0
     assert out.read_text().startswith("image\t")
     assert report.read_text().strip()
+
+
+def test_bench_formats_dif_only_cli(tmp_path):
+    src = _toy_png(tmp_path / "d.png")
+    out = tmp_path / "f.tsv"
+    report = tmp_path / "f.md"
+    rc = bench_main(
+        [
+            "formats",
+            str(src),
+            "--dif-only",
+            "--repeats",
+            "1",
+            "--dif-codecs",
+            "zstd-3",
+            "--out",
+            str(out),
+            "--report",
+            str(report),
+        ]
+    )
+    assert rc == 0
+    lines = out.read_text().splitlines()
+    assert lines[0].startswith("image\t")
+    formats = [line.split("\t")[1] for line in lines[1:] if line]
+    assert "png" not in formats
+
+
+def test_bench_lfs_pointer_detected(tmp_path, capsys):
+    ptr = tmp_path / "fake.png"
+    ptr.write_bytes(
+        b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1234\n"
+    )
+    rc = bench_main(["formats", str(ptr)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "LFS" in out and "git lfs pull" in out

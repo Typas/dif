@@ -4,11 +4,11 @@ members = ["crates/dif-core"]
 # dif-py (PyO3) and dif-wasm (wasm-bindgen) are built by their own toolchains
 # (maturin / wasm-pack), not by `cargo test`, so they're excluded here. They
 # still consume dif-core via a path dependency.
-exclude = ["crates/dif-py", "crates/dif-wasm", "crates/kanzi-shim", "crates/lzav-shim"]
+exclude = ["crates/dif-py", "crates/dif-wasm", "crates/kanzi-shim", "crates/lzav-shim", "crates/libbsc-shim"]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]

@@ -58,11 +58,22 @@ def _render_via_container(path: Path, out_png: Path, scale: float) -> bool:
     src = _WORK / "diagram.drawio"
     src.write_bytes(path.read_bytes())
 
+    # Headless export needs no GPU: on machines without GL accel (e.g. a
+    # Raspberry Pi) the electron "gpu-process" software-rasterizes the whole
+    # canvas in RAM and, on a wide diagram at scale 2, exhausts memory and hangs.
+    # Disable the GPU path and give chromium real shared memory (the default 64MB
+    # /dev/shm crashes large renders).
     proc = subprocess.run(
         [
             cli,
             "run",
             "--rm",
+            "--shm-size=512m",
+            "-e",
+            "ELECTRON_EXTRA_LAUNCH_ARGS="
+            "--disable-gpu --disable-software-rasterizer --disable-dev-shm-usage",
+            "-e",
+            "ELECTRON_DISABLE_GPU=1",
             "-v",
             f"{_WORK}:/data:z",
             IMAGE,

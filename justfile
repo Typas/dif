@@ -36,20 +36,40 @@ check-nostd: build
 test:
     cargo test -p dif-core
 
+# Test the core with std feature. Bare run = std under cfg(test): store / deflate / lz4.
+test-std:
+    cargo test -p dif-core --features std
+
+# Test the core with encode feature (OKLab quantize + dark-theme derivation).
+test-encode:
+    cargo test -p dif-core --features encode
+
 # `native` pulls in brotli + zstd + the libdeflate encoder + the lzav C shim.
 test-native:
     cargo test -p dif-core --features native
 
+# dif-core line coverage 
+cov: 
+    cargo llvm-cov -p dif-core
+
+# dif-core line coverage with std coverage
+cov-std: 
+    cargo llvm-cov -p dif-core --features std
+
 # dif-core line coverage (cargo-llvm-cov, native feature set so every codec is
 # exercised). First run auto-adds the llvm-tools-preview component.
-cov:
+cov-native:
     cargo llvm-cov -p dif-core --features native
+
+# Same as `cov`, but names the exact uncovered lines per file (for chasing gaps).
+cov-native-missing:
+    cargo llvm-cov -p dif-core --features native --show-missing-lines
 
 # Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
 # extension suites.
 #
 # Every feature tested: core matrix + py-test + wasm-test + ext-test.
-test-all: build build-std build-native test test-native py-test wasm-test ext-test
+test-all: build build-std build-native test test-std test-encode test-native py-test wasm-test ext-test
 
 fmt:
     cargo fmt --all
@@ -58,20 +78,33 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy -p dif-core --all-features -- -D warnings
+    cargo clippy --all --all-features -- -D warnings
+
+check:
+    cargo check --all
 
 # --- Bindings (excluded from the cargo workspace) -------------------------
 
 # Build the Python extension into the uv 3.12 env.
 # `dev-release` = optimized + debug info, so benchmark timings are realistic.
+# patchelf (a uv dev dep) lets maturin's rpath patch succeed and silences the
+# rpath warning. The `rm -rf target/maturin` fixes reruns: on a cached rebuild
+# maturin re-populates its staging copy over the prior one and collapses the
+# cdylib's hardlinks to a 0-byte inode, so the next parse fails with "Object is
+# too small". Wiping the staging dir first gives maturin a clean slate.
 py:
+    rm -rf target/maturin
     uv run maturin develop --profile dev-release -m crates/dif-py/Cargo.toml
 
 # Target is wasm32-wasip1 so wasi-libc provides malloc + the C headers the codec
 # deps need (zstd/lzav). `cargo-zigbuild` + `ziglang` (the zig binary wheel) come
 # from the uv dev env; `wasm-bindgen-cli` is version-pinned to the wasm-bindgen
 # crate so the JS glue matches the .wasm.
-# One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned wasm-bindgen-cli).
+# One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned
+# wasm-bindgen-cli). For the -Oz pass (dropped with wasm-pack) install binaryen
+# from the distro: `dnf install binaryen` (Fedora) or `apt install binaryen`
+# (Debian/Ubuntu) — the `cargo install wasm-opt` crate vendors LLVM and fails to
+# link. The `wasm` recipe skips -Oz if wasm-opt is absent.
 wasm-setup:
     rustup target add wasm32-wasip1
     uv sync
@@ -88,6 +121,13 @@ wasm:
         --manifest-path crates/dif-wasm/Cargo.toml
     wasm-bindgen target/wasm32-wasip1/release/dif_wasm.wasm \
         --target web --out-dir "$PWD/dist/pkg"
+    command -v wasm-opt >/dev/null \
+        && wasm-opt -Oz --strip-debug --strip-producers \
+            --enable-bulk-memory --enable-bulk-memory-opt --enable-sign-ext \
+            --enable-mutable-globals --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            "$PWD/dist/pkg/dif_wasm_bg.wasm" -o "$PWD/dist/pkg/dif_wasm_bg.wasm" \
+        || echo "skip wasm-opt: not installed (run just wasm-setup)"
 
 # Load dist/pkg + the wasi shim and decode web/demo/flowchart.dif. Node has no
 # import maps, so a resolve hook wires the glue's bare `wasi_snapshot_preview1`
@@ -106,6 +146,38 @@ wasm-test:
 # first so the `dif` module exists). Needed after a container format bump.
 regen-demo:
     uv run python py/regen_flowchart.py
+
+# Convert one image (PNG/TIFF/JPEG/...) or a .drawio diagram to .dif using the
+# shipped triplet: outer=store (seekable random-access), palette=zstd-16,
+# frame=zstd-10, with a 2-theme palette (light source + OKLab-derived dark).
+# Run `just py` first so the `dif` module exists. Override any arg, e.g.
+# `just convert in.png out.dif strategy=keep` for a single (light) theme, or
+# `just convert in.png out.dif frame_codec=brotli-11`.
+convert IN OUT threads="1" index_width="auto" frame_codec="zstd-10" palette_codec="zstd-16" outer_codec="store" strategy="arithmetic":
+    uv run python -m dif_tools convert "{{IN}}" "{{OUT}}" \
+        --theme-strategy {{strategy}} \
+        --codec {{outer_codec}} \
+        --palette-codec {{palette_codec}} \
+        --frame-codec {{frame_codec}} \
+        --index-width {{index_width}} \
+        --threads {{threads}}
+
+# Regenerate every committed .dif under data/dif-examples/ from its
+# data/testdata/ source via `just convert` (the shipped triplet + 2-theme
+# palette). .drawio inputs reuse the cached PNG render under out/drawio-png/
+# (run `just drawio-setup` once if a render is needed). Run `just py` first.
+# The .dif examples are LFS-tracked; `git add` re-cleans them to pointers.
+regen-examples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    for src in data/testdata/drawio/*.drawio; do
+        just convert "$src" "data/dif-examples/drawio/$(basename "${src%.drawio}").dif"
+    done
+    for src in data/testdata/usc-sipi-misc/*.tiff; do
+        just convert "$src" "data/dif-examples/usc-sipi-misc/$(basename "${src%.tiff}").dif"
+    done
+    n=(data/dif-examples/*/*.dif); echo "regenerated ${#n[@]} examples"
 
 # --- VSCodium / VS Code extension -----------------------------------------
 # The extension reuses the wasip1 decoder built by `just wasm` (all 8 codecs)
@@ -154,15 +226,26 @@ drawio_image := "docker.io/rlespinasse/drawio-export:v4.52.0"
 drawio-setup:
     podman pull {{drawio_image}}
 
-# Render a .drawio to PNG via the local container.
-drawio-png IN OUT:
-    uv run python -c "from dif_tools.drawio import render_drawio_to_png as r; print(r('{{IN}}', '{{OUT}}'))"
+# Render a .drawio to PNG via the local container. SCALE defaults to 2; lower it
+# (e.g. `just drawio-png in.drawio out.png 1`) for wide diagrams on low-RAM hosts
+# -- render memory grows with scale squared.
+drawio-png IN OUT SCALE='2':
+    uv run python -c "from dif_tools.drawio import render_drawio_to_png as r; print(r('{{IN}}', '{{OUT}}', {{SCALE}}))"
 
 # --- Python tools / tests -------------------------------------------------
 
-# Build optional native benchmark codecs (lzav + kanzi shim).
-bench-setup:
-    uv run python -m bench setup
+# Build optional native benchmark codecs (lzav + kanzi + libbsc shims). Wipe the
+# staged shims first: when wrapper.cpp's exported symbols change (e.g. a new
+# libbsc entry point), the .so already on disk is ABI-stale and the ctypes symbol
+# wiring would crash at import -- before the rebuild ever runs. Same reasoning as
+# `just py` wiping target/maturin. A missing .so is handled gracefully (rebuilt).
+# Pass `--cuda` to build libbsc's GPU sort transforms (-m7/-m8): `just bench-setup
+# --cuda`. That build needs nvcc on PATH, OpenMP installed system-wide (<omp.h> +
+# libgomp/libomp, e.g. `apt install libomp-dev`), and an NVIDIA GPU at run time.
+# Default is CPU-only (no nvcc/OpenMP needed).
+bench-setup *ARGS:
+    rm -rf py/bench/_native
+    uv run python -m bench setup {{ARGS}}
 
 # Rank codecs over a .difr body by the M metric.
 bench-codecs *ARGS:
@@ -210,10 +293,11 @@ ci: test-all spec
 # touches system pip. Leaves tracked sources (web/extension/media/viewer.js) and
 # deps (node_modules).
 # Remove build artifacts: cargo target, staged wasm + TS output, dist, py caches,
-# bench scratch, dif module.
+# bench native shims, dif module. Keeps all benchmark records (bench-*.md/.tsv).
 clean:
     cargo clean
     -uv pip uninstall dif
     rm -rf web/extension/media/pkg web/extension/out .pytest_cache dist
     rm -rf py/dif_tools/__pycache__ py/bench/__pycache__ py/tests/__pycache__
-    rm -f web/extension/media/wasi_shim.js bench-report.md bench-codecs.tsv
+    rm -rf py/bench/_native
+    rm -f web/extension/media/wasi_shim.js *.vsix

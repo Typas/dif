@@ -1,3 +1,20 @@
 [submodule "third_party/drawio"]
 	path = third_party/drawio
 	url = https://github.com/jgraph/drawio
+	branch = v30.0.4
+	shallow = true
+[submodule "crates/libbsc-shim/vendor/libbsc"]
+	path = crates/libbsc-shim/vendor/libbsc
+	url = https://github.com/IlyaGrebnov/libbsc
+	branch = v3.3.12
+	shallow = true
+[submodule "crates/lzav-shim/vendor/lzav"]
+	path = crates/lzav-shim/vendor/lzav
+	url = https://github.com/avaneev/lzav
+	branch = 5.8
+	shallow = true
+[submodule "crates/kanzi-shim/vendor/kanzi-cpp"]
+	path = crates/kanzi-shim/vendor/kanzi-cpp
+	url = https://github.com/flanglet/kanzi-cpp
+	branch = 2.5.3
+	shallow = true

@@ -1,6 +1,6 @@
 """CLI for the benchmark harness.
 
-uv run python -m bench setup            # build optional native codecs (lzav)
+uv run python -m bench setup            # build optional native codecs (lzav, kanzi, libbsc)
 uv run python -m bench codecs [imgs..]  # rank codecs over .difr by M
 uv run python -m bench formats [imgs..] # compare DIF vs png/jxl/webp/avif/gif
 """
@@ -14,7 +14,8 @@ from pathlib import Path
 
 from . import native
 from . import compare as cmp
-from .compare import DIF_CODECS, compare_image
+from .codecs import select_codecs
+from .compare import DIF_TRIPLET, compare_image
 from .runner import (
     TSV_HEADER,
     format_stats_table,
@@ -51,20 +52,97 @@ def _images(passed: list[str]) -> list[str]:
     return sorted(out)
 
 
+def _codecs(s: str) -> list[str]:
+    """Parse an lzbench `-e` codec spec into a flat list of DIF variant strings.
+
+    `/` separates codecs, `,` enumerates levels of the preceding family:
+    `family,L1,L2…` -> `family-L1`, `family-L2`, … (`brotli,5,11` -> `brotli-5`,
+    `brotli-11`; `zstd,3,22` -> `zstd-3`, `zstd-22`; `lz4,fast1,hc10` -> `lz4-fast1`,
+    `lz4-hc10`). A bare family with no comma is its default level (`zstd`, `store`).
+    `/` is never part of a codec name, so `--flag=a/b,1` parses and stays clear of
+    the `images` positional."""
+    out: list[str] = []
+    for seg in s.split("/"):
+        if not seg:
+            continue
+        family, *levels = seg.split(",")
+        if levels:
+            out.extend(f"{family}-{lvl}" for lvl in levels)
+        else:
+            out.append(family)
+    return out
+
+
+def _index_widths(s: str) -> list[str]:
+    """`/`-split index-width list (same list axis as the codec flags), validating
+    each against auto/8/16 (argparse `choices` can't pair with a list `type`)."""
+    vals = [x for x in s.split("/") if x]
+    bad = [v for v in vals if v not in ("auto", "8", "16")]
+    if bad:
+        raise argparse.ArgumentTypeError(
+            f"invalid index width(s) {bad}; choose from auto, 8, 16"
+        )
+    return vals
+
+
+def _check_codecs(parser: argparse.ArgumentParser, *specs: list[str] | None) -> None:
+    """Reject unknown codec variants up front via `dif.validate_codec` (the core
+    `Codec::parse`), so a typo errors once here instead of as a ValueError row per
+    image in the table."""
+    import dif
+
+    bad: list[str] = []
+    for spec in specs:
+        for v in spec or []:
+            try:
+                dif.validate_codec(v)
+            except ValueError:
+                if v not in bad:
+                    bad.append(v)
+    if bad:
+        parser.error(
+            f"unknown DIF codec variant(s): {', '.join(bad)} "
+            "(see --help for the family/level syntax)"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("setup", help="build optional native codecs (lzav)")
+    s = sub.add_parser(
+        "setup", help="build optional native codecs (lzav, kanzi, libbsc)"
+    )
+    s.add_argument(
+        "--cuda",
+        action="store_true",
+        help="build libbsc with GPU sort transforms (ST7/ST8 = -m7/-m8). Needs "
+        "nvcc on PATH, OpenMP installed system-wide (<omp.h> + libgomp/libomp, "
+        "e.g. `apt install libomp-dev`), and an NVIDIA GPU at run time. Default: "
+        "CPU-only build",
+    )
     c = sub.add_parser("codecs", help="rank codecs over .difr by M")
     c.add_argument("images", nargs="*")
     c.add_argument("--strategy", default="arithmetic")
     c.add_argument("--repeats", type=int, default=5)
     c.add_argument(
+        "--codecs",
+        type=_codecs,
+        default=None,
+        metavar="lzbench-spec",
+        help="select standalone codecs to bench, same lzbench `-e` syntax as "
+        "--dif-codecs: `/` separates families, `,` enumerates levels (default: the "
+        "whole registry), e.g. --codecs=zstd,3,10/bsc,b25m0e0,b1m3e2/lzav. Matches "
+        "the names shown in the table (with bsc->libbsc, deflate->libdeflate "
+        "aliases). libbsc levels are bsc-CLI knobs `b<MB>m<n>e<n>`: b=block size "
+        "(-b), m=block sorter (-m 0=BWT,3..8=ST), e=coder (-e 0=fast,1=static,"
+        "2=adaptive); any combo builds on demand",
+    )
+    c.add_argument(
         "--numthreads",
         type=int,
         default=1,
-        help="codec threads (default 1). >1 adds rust dif-{codec}/-mt rows that "
-        "probe and roundtrip-verify the multithreaded .dif encode path",
+        help="codec threads (default 1 = single-thread). >1 uses each codec's "
+        "multithreaded encoder where it has one (zstd), else single-thread",
     )
     c.add_argument(
         "--out",
@@ -88,11 +166,43 @@ def main(argv: list[str] | None = None) -> int:
     )
     f.add_argument(
         "--dif-codecs",
-        nargs="+",
-        choices=DIF_CODECS,
-        default=list(DIF_CODECS),
-        metavar="VARIANT",
-        help="DIF codec variants to compare (default: all)",
+        type=_codecs,
+        default=[DIF_TRIPLET[0]],
+        metavar="lzbench-spec",
+        help="outer DIF codec variants, lzbench `-e` syntax: `/` separates codecs, "
+        f"`,` enumerates levels of the preceding family (default: {DIF_TRIPLET[0]}, "
+        "the shipped triplet's outer), e.g. --dif-codecs=zstd,3/brotli,5,11/store",
+    )
+    f.add_argument(
+        "--dif-palette-codecs",
+        type=_codecs,
+        default=[DIF_TRIPLET[1]],
+        metavar="lzbench-spec",
+        help="palette-section codecs, same `/`,`,` syntax as --dif-codecs "
+        f"(default: {DIF_TRIPLET[1]}); a list runs the cartesian product with --dif-codecs",
+    )
+    f.add_argument(
+        "--dif-frame-codecs",
+        type=_codecs,
+        default=[DIF_TRIPLET[2]],
+        metavar="lzbench-spec",
+        help="frame-section codecs, same `/`,`,` syntax as --dif-codecs "
+        f"(default: {DIF_TRIPLET[2]}); a list runs the cartesian product with --dif-codecs",
+    )
+    f.add_argument(
+        "--index-width",
+        type=_index_widths,
+        default=["auto"],
+        metavar="auto|8|16[/…]",
+        help="`/`-separated DIF index width(s): auto-fit (default), or force 8/16-bit "
+        "(quantizes to fit). Multiple values enumerate a dif row set per width. The "
+        "resolved width shows in each row label as -8b/-16b",
+    )
+    f.add_argument(
+        "--dif-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="only measure DIF codecs and report M relative to the store baseline",
     )
     f.add_argument(
         "--out",
@@ -107,10 +217,22 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "setup":
+        # Sources are git submodules; if a build fails, `git submodule update --init`.
         lz = native.build_lzav()
-        print("lzav shim:", "built" if lz else "FAILED (needs cc + network)")
+        print("lzav shim:", "built" if lz else "FAILED (needs cc + submodule)")
         kz = native.build_kanzi()
-        print("kanzi shim:", "built" if kz else "FAILED (needs cargo + git + network)")
+        print("kanzi shim:", "built" if kz else "FAILED (needs cargo + submodule)")
+        bs = native.build_libbsc(cuda=args.cuda)
+        if bs:
+            print("libbsc shim:", "built (CUDA)" if args.cuda else "built")
+        else:
+            need = (
+                "nvcc + system OpenMP (libgomp/libomp, e.g. apt install libomp-dev) "
+                "+ cc + c++ + submodule"
+                if args.cuda
+                else "cc + c++ + submodule"
+            )
+            print(f"libbsc shim: FAILED (needs {need})")
         return 0
 
     imgs = _images(args.images)
@@ -118,8 +240,32 @@ def main(argv: list[str] | None = None) -> int:
         print("no images; pass image files or a directory, e.g. data/testdata/")
         return 1
 
+    lfs_pointers = [
+        p
+        for p in imgs
+        if open(p, "rb").read(200).startswith(b"version https://git-lfs.github.com")
+    ]
+    if lfs_pointers:
+        print("error: the following files are Git LFS pointers (run `git lfs pull`):")
+        for p in lfs_pointers:
+            print(f"  {p}")
+        return 1
+
     if args.cmd == "codecs":
-        reports = run(imgs, args.strategy, args.repeats, args.numthreads)
+        try:
+            selected = select_codecs(args.codecs, args.numthreads)  # validate early
+        except ValueError as e:
+            ap.error(str(e))
+        # Some libbsc block sorters (ST7/ST8 = -m7/-m8) compile but need CUDA at
+        # runtime. Probe them once and refuse up front -- like the LFS guard above
+        # -- rather than dying partway through the benchmark.
+        unavailable = native.unavailable_libbsc(selected)
+        if unavailable:
+            print("error: the following codecs are not available in this build:")
+            for name, reason in unavailable:
+                print(f"  {name}: {reason}")
+            return 1
+        reports = run(imgs, args.strategy, args.repeats, args.numthreads, args.codecs)
 
         # Per-image rows -> TSV (machine-parseable detail).
         with open(args.out, "w", newline="") as fh:
@@ -142,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
+        _check_codecs(
+            ap, args.dif_codecs, args.dif_palette_codecs, args.dif_frame_codecs
+        )
         print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
         reports: list[cmp.ImageRows] = []
         # Per-image detail streams to the console and the TSV; the report gets
@@ -156,8 +305,12 @@ def main(argv: list[str] | None = None) -> int:
                     p,
                     args.repeats,
                     args.dif_codecs,
+                    args.dif_palette_codecs,
+                    args.dif_frame_codecs,
                     stream=True,
                     numthreads=args.numthreads,
+                    index_widths=args.index_width,
+                    dif_only=args.dif_only,
                 )
                 print()
                 w.writerows(cmp.iter_rows(p, rows))

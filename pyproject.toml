@@ -1,6 +1,6 @@
 [project]
 name = "dif-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Converters, tests, and benchmarks for the DIF (Diagram Image Format)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -27,6 +27,7 @@ dev = [
     "cargo-zigbuild>=0.22.3",
     "matplotlib>=3.10.9",
     "pytest-cov>=7.1.0",
+    "patchelf>=0.17.2.4",
 ]
 
 # Virtual project: deps only, nothing to build here. The `dif` extension is
@@ -36,9 +37,12 @@ package = false
 
 [tool.black]
 target-version = ["py312"]
+# Vendored submodules (e.g. kanzi-cpp) ship their own .py files — never reformat them.
+extend-exclude = '''/(crates/[^/]+/vendor|third_party)/'''
 
 [tool.ruff]
 target-version = "py312"
+extend-exclude = ["crates/*/vendor", "third_party"]
 
 [tool.pytest.ini_options]
 pythonpath = ["py"]
@@ -47,7 +51,7 @@ markers = ["slow: integration tests needing external tools (e.g. podman)"]
 
 # Coverage of the Python source (the `dif` core is Rust, measured by `just cov`).
 [tool.coverage.run]
-source = ["dif_tools", "bench"]
+source_pkgs = ["dif_tools", "bench"]
 branch = true
 # Standalone matplotlib analysis script (hyphenated, not importable, run by hand
 # on two TSVs) — not part of the library surface, so out of the coverage scope.
@@ -59,3 +63,8 @@ show_missing = true
 [tool.ty.environment]
 # Hand-written stub for the compiled `dif` extension module.
 extra-paths = ["py/typings"]
+
+[tool.ty.src]
+# Vendored submodules (e.g. kanzi-cpp) ship their own .py files — never type-check
+# them; mirrors the black/ruff vendor excludes above.
+exclude = ["crates/*/vendor", "third_party"]

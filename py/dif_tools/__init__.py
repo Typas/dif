@@ -9,7 +9,7 @@ from .convert import (
     load_image,
     resolve_raster,
 )
-from .themes import STRATEGIES, derive_lut, derive_palette
+from .themes import STRATEGIES, derive_base_color, derive_palette
 
 __all__ = [
     "convert_file",
@@ -18,6 +18,6 @@ __all__ = [
     "load_image",
     "resolve_raster",
     "derive_palette",
-    "derive_lut",
+    "derive_base_color",
     "STRATEGIES",
 ]

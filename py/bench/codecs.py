@@ -1,15 +1,21 @@
 """Registry of lossless compression codecs for the `.difr` benchmark.
 
-Each :class:`Codec` self-detects availability at import time, so the harness
-runs with whatever is installed and reports the rest as unavailable. Candidates
-follow the project spec (docs/plan.md). ``decompress`` receives the original length
-because some libraries (libdeflate) require the output size up front.
+This benchmark measures *standalone* compression algorithms over the raw `.difr`
+body — it deliberately does **not** include the DIF container itself. Each
+:class:`Codec` self-detects availability at import time, so the harness runs with
+whatever is installed and reports the rest as unavailable. ``decompress`` receives
+the original length because some libraries (libdeflate) require the output size up
+front.
+
+Codecs are thread-aware: a codec may carry an optional multithreaded encoder.
+:func:`all_codecs` picks the multithreaded encoder when ``numthreads > 1`` (and the
+codec has one), else the single-thread encoder — never both for one codec.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, cast
+from typing import Callable
 
 
 @dataclass
@@ -19,6 +25,9 @@ class Codec:
     decompress: Callable[[bytes, int], bytes]
     available: bool = True
     note: str = ""
+    # Optional multithreaded encoder `(data, numthreads) -> bytes`; the stream
+    # decodes identically with `decompress`. None = single-thread only.
+    mt_compress: Callable[[bytes, int], bytes] | None = None
 
 
 _REGISTRY: list[Codec] = []
@@ -49,7 +58,7 @@ try:
 except ImportError:  # pragma: no cover
     _add(_unavailable("libdeflate-6", "pip install deflate"))
 
-# --- brotli ---------------------------------------------------------------
+# --- brotli (5 = study default, 11 = max quality) -------------------------
 try:
     import brotli as _brotli
 
@@ -63,28 +72,6 @@ try:
         )
 except ImportError:  # pragma: no cover
     _add(_unavailable("brotli", "pip install brotli"))
-
-# --- bzip3 ----------------------------------------------------------------
-# bzip3 is block-based; lzbench maps a "level" to block_size via
-# block_size = 1 << (19 + level), capped at 511 MiB. See
-# https://github.com/inikep/lzbench/blob/6ab4808616e5e6163d3f4a898b7527a1940cc35e/bench/symmetric_codecs.cpp#L153
-try:
-    import bz3 as _bz3
-
-    _BZ3_MAX = 511 << 20  # lzbench cap
-    for _lvl in (1, 5):  # level 1 = 1 MiB, level 5 = 16 MiB block
-        _bs = min(1 << (19 + _lvl), _BZ3_MAX)
-        _mib = _bs >> 20
-        _add(
-            Codec(
-                f"bzip3-{_lvl}",
-                (lambda bs: lambda d: _bz3.compress(d, bs))(_bs),
-                lambda c, n: _bz3.decompress(c),
-                note=f"level={_lvl} block_size={_mib}MiB",
-            )
-        )
-except ImportError:  # pragma: no cover
-    _add(_unavailable("bzip3", "pip install bzip3"))
 
 # --- lz4 ------------------------------------------------------------------
 try:
@@ -100,7 +87,7 @@ try:
     for _lvl in (4, 9):
         _add(
             Codec(
-                f"lz4hc-{_lvl}",
+                f"lz4-hc{_lvl}",
                 (
                     lambda lv: (
                         lambda d: _lz4b.compress(
@@ -114,14 +101,24 @@ try:
 except ImportError:  # pragma: no cover
     _add(_unavailable("lz4", "pip install lz4"))
 
-# --- zstd (via pyzstd; fast = negative level) -----------------------------
+# --- zstd (via pyzstd; fast = negative level). Multithreaded via nbWorkers. ----
 try:
     import pyzstd as _pyzstd
+    from pyzstd import CParameter as _CP
+
+    def _zstd_mt(lvl: int):
+        def mt(data: bytes, nt: int) -> bytes:
+            return _pyzstd.compress(
+                data, {_CP.compressionLevel: lvl, _CP.nbWorkers: nt}
+            )
+
+        return mt
 
     for _label, _lvl in (
         ("zstd-fast1", -1),
         ("zstd-3", 3),
         ("zstd-10", 10),
+        ("zstd-18", 18),
         ("zstd-22", 22),
     ):
         _add(
@@ -129,70 +126,106 @@ try:
                 _label,
                 (lambda lv: lambda d: _pyzstd.compress(d, lv))(_lvl),
                 lambda c, n: _pyzstd.decompress(c),
+                mt_compress=_zstd_mt(_lvl),
             )
         )
 except ImportError:  # pragma: no cover
     _add(_unavailable("zstd", "pip install pyzstd"))
 
-# --- lzav / kanzi: optional native shims (see bench/native.py) ------------
+# --- lzav / kanzi / libbsc: optional native shims (see bench/native.py) ------
 from . import native as _native  # noqa: E402
 
 for _c in _native.codecs():
     _add(_c)
 
 
-# Codecs whose Rust encoder has a multithreaded path (zstd `NbWorkers`, brotli
-# `compress_multi`); the dif-py extension is built with the `native` feature, so
-# both are live. `dif_codecs()` probes them through the *real* `.dif` container
-# (the same `to_dif_workers` path `bench formats` uses) so their roundtrip is
-# verified by the harness — `bench formats` never checks it.
-#
-# Only brotli-11 is MT'd: `compress_multi` drives brotli's full (q10–11) encoder
-# only, so the core gates the worker path to `level >= 10` (codec.rs) and brotli-5
-# falls back to single-thread — a `brotli-5-mt` row would just duplicate `brotli-5`.
-DIF_MT_CODECS: tuple[str, ...] = (
-    "zstd-3",
-    "zstd-10",
-    "zstd-22",
-    "brotli-11",
-)
+def _select(codec: Codec, numthreads: int) -> Codec:
+    """Single-thread codec at ``numthreads <= 1``; the multithreaded variant (same
+    name) when ``numthreads > 1`` and the codec has one. Never both."""
+    if numthreads > 1 and codec.mt_compress is not None:
+        mt = codec.mt_compress
+        return Codec(
+            codec.name,
+            lambda d: mt(d, numthreads),
+            codec.decompress,
+            codec.available,
+            codec.note,
+        )
+    return codec
 
 
-def dif_codecs(numthreads: int = 1) -> list[Codec]:
-    """Rust-`dif`-backed codecs that compress the ``.difr`` body via the actual
-    ``.dif`` container, so the multithreaded encode path is exercised *and*
-    roundtrip-checked (decode -> re-serialize must reproduce the input bytes).
+def all_codecs(numthreads: int = 1) -> list[Codec]:
+    return [_select(c, numthreads) for c in _REGISTRY]
 
-    Empty unless ``numthreads > 1`` — a default ``bench codecs`` run is
-    unchanged. When enabled, each codec yields a single-thread reference
-    (``dif-{c}``) and a worker variant (``dif-{c}-mt``) so the size delta the
-    workers introduce is visible side by side."""
-    if numthreads <= 1:
-        return []
-    try:
-        import dif  # the built extension; only needed for the -mt probe
-    except ImportError:  # pragma: no cover
-        return [_unavailable("dif-mt", "dif extension not built (maturin)")]
 
-    def _enc(codec: str, workers: int):
-        # raw is `.difr` bytes -> rebuild the image -> encode the `.dif` container.
-        # `codec` is a runtime str; narrow to the typed alias (mirrors compare.py).
-        name = cast("dif.CodecName", codec)
-        return lambda raw: bytes(dif.Image.from_difr(raw).to_dif(name, workers))
+def available_codecs(numthreads: int = 1) -> list[Codec]:
+    return [c for c in all_codecs(numthreads) if c.available]
 
-    def _dec(comp: bytes, _n: int) -> bytes:
-        return bytes(dif.Image.from_dif(comp).to_difr())
 
-    out: list[Codec] = []
-    for codec in DIF_MT_CODECS:
-        out.append(Codec(f"dif-{codec}", _enc(codec, 0), _dec))
-        out.append(Codec(f"dif-{codec}-mt", _enc(codec, numthreads), _dec))
+# Aliases so `--codecs` accepts the DIF family names (`bsc`, `deflate`) as well as
+# the registry/table names (`libbsc`, `libdeflate`) the harness actually displays.
+_FAMILY_ALIASES = {"bsc": "libbsc", "deflate": "libdeflate"}
+
+
+def _family(name: str) -> str:
+    """Codec family: the name without its trailing ``-level`` (``zstd-3`` -> ``zstd``)."""
+    return name.rsplit("-", 1)[0] if "-" in name else name
+
+
+def _canon(token: str) -> str:
+    """Rewrite a DIF-family token to its registry name, keeping any ``-level``
+    suffix (``bsc`` -> ``libbsc``, ``bsc-b25m0e1`` -> ``libbsc-b25m0e1``)."""
+    fam = _family(token)
+    return _FAMILY_ALIASES[fam] + token[len(fam) :] if fam in _FAMILY_ALIASES else token
+
+
+def _dynamic_libbsc(token: str) -> Codec | None:
+    """Build a libbsc codec for an on-demand ``b/m/e`` spec token that isn't a
+    pre-registered default (e.g. ``libbsc-b1m3e2``).
+
+    ``None`` when ``token`` isn't a ``libbsc-<b/m/e>`` spec or the shim isn't
+    built; propagates ``ValueError`` (from :func:`native.make_libbsc`) when the
+    token *is* a libbsc spec with an out-of-range field, so a typo errors clearly.
+    """
+    if _family(token) != "libbsc" or "-" not in token:
+        return None
+    return _native.make_libbsc(token.split("-", 1)[1])
+
+
+def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
+    """Filter the registry by lzbench ``-e`` tokens (see ``bench.__main__._codecs``).
+
+    A bare family token (``zstd``, ``libbsc``) selects every level of that family;
+    a ``family-level`` token (``zstd-3``) selects that exact codec. Matching is
+    against the names shown in the table, with the ``bsc``/``deflate`` aliases.
+    A ``libbsc-<b/m/e>`` token (``bsc-b1m3e2``) not among the registered defaults
+    is built on demand from the shim. ``None``/empty = the whole registry. Raises
+    ``ValueError`` naming any token that matches no codec.
+    """
+    if not specs:
+        return all_codecs(numthreads)
+    tokens = [_canon(s) for s in specs]
+    exact = {t for t in tokens if "-" in t}
+    families = {t for t in tokens if "-" not in t}
+    out = [
+        c
+        for c in all_codecs(numthreads)
+        if c.name in exact or _family(c.name) in families
+    ]
+    matched = {c.name for c in out} | {_family(c.name) for c in out}
+    missing: list[str] = []
+    for orig, t in zip(specs, tokens):
+        if t in matched:
+            continue
+        c = _dynamic_libbsc(t)  # on-demand libbsc b/m/e spec?
+        if c is not None:
+            out.append(_select(c, numthreads))
+            matched.add(t)
+        else:
+            missing.append(orig)
+    if missing:
+        names = ", ".join(sorted({c.name for c in _REGISTRY}))
+        raise ValueError(
+            f"no registered codec matches: {', '.join(missing)}; available: {names}"
+        )
     return out
-
-
-def all_codecs() -> list[Codec]:
-    return list(_REGISTRY)
-
-
-def available_codecs() -> list[Codec]:
-    return [c for c in _REGISTRY if c.available]

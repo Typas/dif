@@ -1,9 +1,11 @@
 """Compare DIF against PNG / lossless JXL / WebP / AVIF / GIF.
 
-Sizes, encode/decode speeds, and a losslessness check via ``imagecodecs`` (and
-Pillow for GIF). Each format is guarded: a missing codec or a non-lossless
-result is annotated rather than crashing the run. GIF and any format that fails
-the lossless check are marked ``LOSSY`` so the size comparison stays honest.
+Sizes and encode/decode speeds via ``imagecodecs`` (and Pillow for GIF). Each
+format is guarded: a missing codec is annotated rather than crashing the run.
+Every format here is lossless by construction, so no loss column is reported; a
+round-trip check still runs (``FormatResult.lossless``, asserted in tests) to
+catch a codec that silently stops round-tripping. GIF is genuine lossless LZW —
+it only diverges when an image exceeds its 256-entry palette (width, not loss).
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import dif
 import imagecodecs
@@ -24,24 +25,64 @@ from PIL import Image as PILImage
 
 from dif_tools import dif_image_from_array, load_image, resolve_raster
 
-from .metric import speed
+from .metric import compute_m, speed
 
-# The study's codec variants (docs/plan.md). `DIF_BASELINE` names the shipped default
-# codec; `REL_REF` is the `rel` reference column — every format's size is reported
-# relative to it (PNG, the universal lossless baseline). `zstd-22` is zstd's max
-# (ultra) level: slow/CPU-bound, the zstd analogue to brotli-11 for the `-mt` probe.
-DIF_CODECS: tuple[str, ...] = (
-    "zstd-3",
-    "zstd-10",
-    "zstd-22",
-    "brotli-5",
-    "brotli-11",
-    "libdeflate-6",
-    "lz4-fast1",
-    "lzav-1",
-)
-DIF_BASELINE = "zstd-3"
+# `DIF_TRIPLET` is the shipped encode config — (outer, palette, frame): outer
+# `store` keeps frames seekable for random-access / low-memory decode, palette
+# `zstd-16`, frame `zstd-10`. It is the default `bench formats` DIF row; sweep any
+# section at runtime with the lzbench-style `--dif-*codecs` flags (no static study
+# set — the flags build any sweep or matrix). `REL_REF` is the `rel` reference
+# column — every format's size is relative to it (PNG, the universal lossless
+# baseline).
+DIF_TRIPLET: tuple[str, str, str] = ("store", "zstd-16", "zstd-10")
 REL_REF = "png"  # `rel` column reference format
+
+# Compact codec abbreviations for the DIF row labels.
+_FAMILY_ABBR = {
+    "deflate": "PK",
+    "libdeflate": "PK",
+    "brotli": "br",
+    "bsc": "bsc",
+    "zstd": "zst",
+    "lzav": "av",
+}
+# Bare-family aliases resolve to their study-default level for display.
+_DEFAULT_LEVEL = {
+    "deflate": "6",
+    "libdeflate": "6",
+    "brotli": "5",
+    "bsc": "2",
+    "zstd": "3",
+    "lzav": "1",
+}
+
+
+def _abbr(variant: str) -> str:
+    """Abbreviate a codec variant, e.g. zstd-3->zst3, lz4-fast1->4f1,
+    lz4-hc9->4hc9, libdeflate-6->PK6, store->st."""
+    if variant == "store":
+        return "st"
+    if variant.startswith("lz4"):
+        rest = variant[3:].lstrip("-")
+        if rest.startswith("fast"):
+            return "4f" + rest[4:]
+        if rest.startswith("hc"):
+            return "4hc" + rest[2:]
+        return "4f1"  # bare "lz4"
+    fam, _, lvl = variant.partition("-")
+    base = _FAMILY_ABBR.get(fam)
+    if base is None:
+        return variant  # unknown — show verbatim (e.g. a typo'd codec)
+    return base + (lvl or _DEFAULT_LEVEL[fam])
+
+
+def _dif_label(outer: str, palette: str, frame: str, index_bits: int) -> str:
+    """`dif-<outer>-<Nb>` when palette/frame inherit the outer codec, else
+    `dif-<outer>-<palette>-<frame>-<Nb>`. The `-<Nb>` suffix (`-8b`/`-16b`) is the
+    *resolved* index width, so the row shows which profile the build landed on."""
+    if palette == outer and frame == outer:
+        return f"dif-{_abbr(outer)}-{index_bits}b"
+    return f"dif-{_abbr(outer)}-{_abbr(palette)}-{_abbr(frame)}-{index_bits}b"
 
 
 @dataclass
@@ -53,12 +94,12 @@ class FormatResult:
     available: bool
     lossless: bool = True
     note: str = ""
+    m: float = float("nan")  # M score relative to store baseline (dif_only mode)
 
 
-def _as_rgb(arr: np.ndarray, is_gray: bool) -> np.ndarray:
-    """A contiguous 3-channel array for codecs that reject single-channel input."""
-    rgb = np.repeat(arr[..., None], 3, axis=2) if is_gray else arr[..., :3]
-    return np.ascontiguousarray(rgb)
+def _as_rgb(arr: np.ndarray) -> np.ndarray:
+    """A contiguous 3-channel (RGB) view of an RGBA array."""
+    return np.ascontiguousarray(arr[..., :3])
 
 
 def _equal(decoded: np.ndarray, expected: np.ndarray) -> bool:
@@ -72,7 +113,13 @@ def _equal(decoded: np.ndarray, expected: np.ndarray) -> bool:
 
 
 def _measure(
-    name: str, enc, dec, expected: np.ndarray | None, nbytes: int, repeats: int
+    name: str,
+    enc,
+    dec,
+    expected: np.ndarray | None,
+    nbytes: int,
+    repeats: int,
+    note: str = "",
 ) -> FormatResult:
     try:
         blob = enc()
@@ -80,7 +127,7 @@ def _measure(
         lossless = True if expected is None else _equal(decoded, expected)
         e, _ = speed(enc, nbytes, repeats)
         d, _ = speed(lambda: dec(blob), nbytes, repeats)
-        return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless)
+        return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless, note)
     except Exception as exc:  # noqa: BLE001
         return FormatResult(name, 0, 0, 0, False, note=type(exc).__name__)
 
@@ -88,29 +135,28 @@ def _measure(
 def compare_image(
     path: str | Path,
     repeats: int = 3,
-    dif_codecs: tuple[str, ...] | list[str] = DIF_CODECS,
+    dif_codecs: tuple[str, ...] | list[str] = (DIF_TRIPLET[0],),
+    palette_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[1],),
+    frame_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[2],),
     stream: bool = False,
     numthreads: int = 1,
+    index_widths: tuple[str, ...] | list[str] = ("auto",),
+    dif_only: bool = False,
 ) -> list[FormatResult]:
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
     raster = resolve_raster(path)
-    # `load_image` returns the natural dtype: uint8 for 8-bit (gray or RGBA),
-    # uint16 for 16-bit grayscale — exactly what the encoders below expect.
-    arr, is_gray, depth = load_image(raster)
-    rgb = _as_rgb(arr, is_gray)
+    # `load_image` returns an RGBA8 array; v3 DIF is indexed-only.
+    arr = load_image(raster)
+    rgb = _as_rgb(arr)
     nbytes = arr.nbytes
     rows: list[FormatResult] = []
     ref_size: int | None = None  # running reference for the live `rel` column
 
-    if stream:
-        print(_HEAD)
-        print(_SEP)
-
-    def emit(name: str, enc, dec, expected):
+    def emit(name: str, enc, dec, expected, note: str = ""):
         """Measure one format, then print its row live (mirrors bench_image)."""
         nonlocal ref_size
-        r = _measure(name, enc, dec, expected, nbytes, repeats)
+        r = _measure(name, enc, dec, expected, nbytes, repeats, note)
         # PNG sets the running `rel` reference; the final table re-derives it via
         # _ref_size. dif rows stream before png, so their live rel stays blank
         # until png lands — the re-derived final/TSV/report tables are correct.
@@ -124,13 +170,83 @@ def compare_image(
     # dark-theme synthesis run inside the closure (parity with png_encode(arr),
     # which encodes the raw array). `arr` is already in memory, so no file I/O
     # is timed. `decode` renders one theme back to pixels (file -> bitmap).
-    def dif_enc(strategy: str, codec: str, workers: int = 0):
-        return lambda: dif_image_from_array(arr, is_gray, depth, strategy).to_dif(
-            cast("dif.CodecName", codec), workers
+    # The whole `.dif` is encoded all-mt or all-st: workers come from --numthreads.
+    workers = numthreads if numthreads > 1 else 0
+
+    def dif_enc(strategy: str, outer: str, palette: str, frame: str, iw: str):
+        return lambda: dif_image_from_array(arr, strategy, iw).to_dif(
+            outer,
+            palette,
+            frame,
+            workers=workers,
         )
 
     def dif_dec(b: bytes):
-        return dif.Image.from_dif(b).render("light", 0)[2]
+        return dif.Image.from_dif(b).render("light", (255, 255, 255), 0)[2]
+
+    def dif_meta(iw: str) -> tuple[int, str]:
+        """Resolve `(index_bits, note)` for width request `iw` from one untimed
+        build — the timed encoder rebuilds, so this only reads metadata. The note
+        reports the pre-quantization color count when the palette was reduced."""
+        img = dif_image_from_array(arr, "keep", iw)
+        note = f"quant {img.source_colors}" if img.quantized() else ""
+        return img.index_bits, note
+
+    pcs = list(palette_codecs) if palette_codecs else [None]
+    fcs = list(frame_codecs) if frame_codecs else [None]
+
+    if dif_only:
+        if stream:
+            print(_DIF_HEAD)
+            print(_DIF_SEP)
+
+        for iw in index_widths:
+            bits, note = dif_meta(iw)
+
+            store_r = _measure(
+                _dif_label("store", "store", "store", bits),
+                dif_enc("keep", "store", "store", "store", iw),
+                dif_dec,
+                None,
+                nbytes,
+                repeats,
+                note,
+            )
+            store_r.m = 0.0
+            rows.append(store_r)
+            if stream:
+                print(_dif_row_line(store_r))
+
+            for outer in dif_codecs:
+                for pal in pcs:
+                    for frm in fcs:
+                        p = outer if pal is None else pal
+                        f = outer if frm is None else frm
+                        r = _measure(
+                            _dif_label(outer, p, f, bits),
+                            dif_enc("keep", outer, p, f, iw),
+                            dif_dec,
+                            None,
+                            nbytes,
+                            repeats,
+                            note,
+                        )
+                        if (
+                            store_r.available
+                            and r.available
+                            and r.enc_mbps > 0
+                            and r.dec_mbps > 0
+                        ):
+                            r.m = compute_m(
+                                store_r.size / r.size,
+                                store_r.enc_mbps / r.enc_mbps,
+                                store_r.dec_mbps / r.dec_mbps,
+                            )
+                        rows.append(r)
+                        if stream:
+                            print(_dif_row_line(r))
+
+        return rows
 
     # The `rel` reference row (REL_REF picks it by name) is emitted first so every
     # row below has a live ratio and the table is topped by the baseline. png's
@@ -138,31 +254,44 @@ def compare_image(
     # FIXME: "emit ref first" assumes REL_REF == "png". If REL_REF moves to another
     # row, this hardcoded-first emit no longer matches it — rows above the real ref
     # get a stale live ratio. Drive the first-emit off REL_REF, or assert they agree.
+    if stream:
+        print(_HEAD)
+        print(_SEP)
     emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
 
-    # Headline row: the shipped default (zstd-3) carrying *both* themes
-    # (light + dark) — the real `.dif` product, not directly size-comparable to
-    # the single-image formats below.
-    emit(f"dif-{DIF_BASELINE}-2t", dif_enc("arithmetic", DIF_BASELINE), dif_dec, None)
+    # All DIF rows for one index-width request share its resolved width + quant
+    # note (the palette — hence the width — is the same across codecs/themes).
+    for iw in index_widths:
+        bits, note = dif_meta(iw)
 
-    # Codec comparison: one theme each, apples-to-apples with the single-image
-    # formats (png/gif/webp/jxl/avif). DIF losslessness is covered in tests.
-    for codec in dif_codecs:
-        emit(f"dif-{codec}", dif_enc("keep", codec), dif_dec, None)
+        # Headline row: the shipped triplet (store / zstd-16 / zstd-10) carrying
+        # *both* themes (light + dark) — the real `.dif` product, not directly
+        # size-comparable to the single-theme formats below. `-2p` = 2-palette.
+        outer, palette, frame = DIF_TRIPLET
+        emit(
+            f"{_dif_label(outer, palette, frame, bits)}-2p",
+            dif_enc("arithmetic", outer, palette, frame, iw),
+            dif_dec,
+            None,
+            note,
+        )
 
-    # Multithreaded encode (`-mt`): same standard container, decoded single-
-    # thread, so it charts the enc-speed/size tradeoff of workers > 1. zstd
-    # (nbWorkers) and brotli (compress_multi) carry native workers; zstd barely
-    # splits at diagram sizes, but the slow brotli levels scale ~linearly.
-    if numthreads > 1:
-        for codec in dif_codecs:
-            if codec.startswith(("zstd-", "brotli-")):
-                emit(
-                    f"dif-{codec}-mt",
-                    dif_enc("keep", codec, numthreads),
-                    dif_dec,
-                    None,
-                )
+        # Codec comparison: one theme each (apples-to-apples with the single-image
+        # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --numthreads.
+        # palette/frame default to inheriting the outer codec; given lists run the
+        # cartesian product. DIF losslessness is covered in tests.
+        for outer in dif_codecs:
+            for pal in pcs:
+                for frm in fcs:
+                    p = outer if pal is None else pal
+                    f = outer if frm is None else frm
+                    emit(
+                        _dif_label(outer, p, f, bits),
+                        dif_enc("keep", outer, p, f, iw),
+                        dif_dec,
+                        None,
+                        note,
+                    )
 
     # avif/jxl pinned to their library's *native default* effort knob so the
     # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs
@@ -172,12 +301,17 @@ def compare_image(
     # apples-to-apples 1-core measure (dif/png/gif are single-threaded) and a
     # future imagecodecs `None`->auto default can't skew it; --numthreads N lifts
     # the cap to probe jxl/avif scaling (webp lossless ignores it).
+    # The `3ch` note flags codecs fed `rgb` (alpha dropped) while enc/dec MB/s is
+    # still normalized over `nbytes` = the 4-channel `arr`. They process 3/4 the
+    # bytes but are credited the full RGBA payload, so their throughput reads ~4/3
+    # high vs a strict bytes-processed measure. (png/dif/jxl encode `arr`, no skew.)
     nt = numthreads
     emit(
         "webp-ll",
         lambda: imagecodecs.webp_encode(rgb, lossless=True, numthreads=nt),
         imagecodecs.webp_decode,
         rgb,
+        note="3ch",
     )
     emit(
         "jxl-ll",
@@ -192,10 +326,12 @@ def compare_image(
         ),
         imagecodecs.avif_decode,
         rgb,
+        note="3ch",
     )
 
-    # GIF via Pillow (palette; lossless only for <=256 colors).
-    pil = PILImage.fromarray(arr if is_gray else rgb)
+    # GIF via Pillow (lossless LZW; round-trips exactly only for <=256 colors,
+    # else the palette quantize drops colors — a width limit, not codec loss).
+    pil = PILImage.fromarray(rgb)
 
     def gif_enc() -> bytes:
         buf = io.BytesIO()
@@ -204,9 +340,9 @@ def compare_image(
 
     def gif_dec(b: bytes) -> np.ndarray:
         out = PILImage.open(io.BytesIO(b))
-        return np.asarray(out.convert("L") if is_gray else out.convert("RGB"))
+        return np.asarray(out.convert("RGB"))
 
-    emit("gif", gif_enc, gif_dec, arr if is_gray else rgb)
+    emit("gif", gif_enc, gif_dec, rgb, note="3ch")
     return rows
 
 
@@ -221,7 +357,7 @@ def _ref_size(rows: list[FormatResult]) -> int | None:
 
 # Fixed-width pipe-table layout matching bench/runner.py's `bench_image` console
 # output. Shared by the live stream and the final table so the two are identical.
-_FMT_W = 16
+_FMT_W = 25
 _SIZE_W = 10
 _SPD_W = 12
 _REL_W = 6
@@ -243,10 +379,34 @@ def _row_line(r: FormatResult, ref_size: int | None) -> str:
             f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {r.note:^{_NOTE_W}} |"
         )
     rel = f"x{r.size / ref_size:.2f}" if ref_size else ""
-    tag = "" if r.lossless else "LOSSY"
     return (
         f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
-        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {tag:^{_NOTE_W}} |"
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {r.note:^{_NOTE_W}} |"
+    )
+
+
+# DIF-only mode display (M metric relative to store baseline).
+_DIF_M_W = 8
+_DIF_HEAD = (
+    f"| {'format':^{_FMT_W}} | {'size':^{_SIZE_W}} | {'enc MB/s':^{_SPD_W}} "
+    f"| {'dec MB/s':^{_SPD_W}} | {'M':^{_DIF_M_W}} | {'note':^{_NOTE_W}} |"
+)
+_DIF_SEP = (
+    f"|{'-' * (_FMT_W + 2)}|{'-' * (_SIZE_W + 2)}|{'-' * (_SPD_W + 2)}"
+    f"|{'-' * (_SPD_W + 2)}|{'-' * (_DIF_M_W + 2)}|{'-' * (_NOTE_W + 2)}|"
+)
+
+
+def _dif_row_line(r: FormatResult) -> str:
+    if not r.available:
+        return (
+            f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
+            f"| {'':^{_SPD_W}} | {'':^{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
+        )
+    m_str = f"{r.m:.2f}" if r.m == r.m else ""  # nan check
+    return (
+        f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {m_str:>{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
     )
 
 
@@ -264,7 +424,7 @@ TSV_HEADER = (
     "enc_mbps",
     "dec_mbps",
     "rel",
-    "lossless",
+    "M",
     "available",
     "note",
 )
@@ -276,6 +436,7 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
     ref_size = _ref_size(rows)
     for r in rows:
         rel = f"{r.size / ref_size:.4f}" if (ref_size and r.available) else ""
+        m_val = f"{r.m:.4f}" if (r.available and r.m == r.m) else ""
         yield (
             name,
             r.name,
@@ -283,7 +444,7 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
             f"{r.enc_mbps:.2f}" if r.available else "",
             f"{r.dec_mbps:.2f}" if r.available else "",
             rel,
-            int(r.lossless),
+            m_val,
             int(r.available),
             r.note,
         )
@@ -307,7 +468,7 @@ class FormatStat:
     enc_mbps: float
     dec_mbps: float
     rel_mean: float
-    lossless: bool
+    m_mean: float = float("nan")
     note: str = ""
 
 
@@ -322,6 +483,7 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
     for name, items in by_fmt.items():
         rs = [r for r, _ in items]
         rels = [r.size / d for r, d in items if d]
+        ms = [r.m for r in rs if r.m == r.m]  # exclude nan
         stats.append(
             FormatStat(
                 name,
@@ -330,12 +492,16 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
                 statistics.mean(r.enc_mbps for r in rs),
                 statistics.mean(r.dec_mbps for r in rs),
                 statistics.mean(rels) if rels else float("nan"),
-                all(r.lossless for r in rs),
+                statistics.mean(ms) if ms else float("nan"),
                 rs[-1].note,
             )
         )
-    # rel reference (REL_REF) first, then alphabetical by name (codecs cluster).
-    stats.sort(key=lambda s: (s.name != REL_REF, s.name))
+    # dif_only mode: sort by M mean descending; otherwise rel reference first.
+    has_m = any(s.m_mean == s.m_mean for s in stats)
+    if has_m:
+        stats.sort(key=lambda s: (s.m_mean != s.m_mean, -s.m_mean))
+    else:
+        stats.sort(key=lambda s: (s.name != REL_REF, s.name))
     return stats
 
 
@@ -364,15 +530,27 @@ def subdir_stats(reports: Sequence[ImageRows]) -> list[tuple[str, list[FormatSta
 
 def format_stats_table(stats: list[FormatStat]) -> str:
     """Aggregate block as a GitHub-flavored markdown table."""
-    rows = [
-        "| format | n | size | enc MB/s | dec MB/s | rel | lossless | note |",
-        "|---|--:|--:|--:|--:|--:|:--:|---|",
-    ]
-    for s in stats:
-        rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
-        ll = "yes" if s.lossless else "LOSSY"
-        rows.append(
-            f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
-            f"| {s.dec_mbps:.1f} | {rel} | {ll} | {s.note} |"
-        )
+    has_m = any(s.m_mean == s.m_mean for s in stats)
+    if has_m:
+        rows = [
+            "| format | n | size | enc MB/s | dec MB/s | M mean | note |",
+            "|---|--:|--:|--:|--:|--:|---|",
+        ]
+        for s in stats:
+            m_str = "" if s.m_mean != s.m_mean else f"{s.m_mean:.3f}"
+            rows.append(
+                f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
+                f"| {s.dec_mbps:.1f} | {m_str} | {s.note} |"
+            )
+    else:
+        rows = [
+            "| format | n | size | enc MB/s | dec MB/s | rel | note |",
+            "|---|--:|--:|--:|--:|--:|---|",
+        ]
+        for s in stats:
+            rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
+            rows.append(
+                f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
+                f"| {s.dec_mbps:.1f} | {rel} | {s.note} |"
+            )
     return "\n".join(rows)

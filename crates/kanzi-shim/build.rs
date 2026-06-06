@@ -9,10 +9,9 @@ fn main() {
     let src = root.join("vendor/kanzi-cpp/src");
     if !src.exists() {
         panic!(
-            "kanzi-cpp sources not found at {}. Clone with:\n  \
-             git clone --depth 1 https://github.com/flanglet/kanzi-cpp {}/vendor/kanzi-cpp",
-            src.display(),
-            root.display()
+            "kanzi-cpp sources not found at {}. Init the submodule:\n  \
+             git submodule update --init crates/kanzi-shim/vendor/kanzi-cpp",
+            src.display()
         );
     }
 
