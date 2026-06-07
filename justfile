@@ -68,6 +68,18 @@ cov-native:
 cov-native-missing:
     cargo llvm-cov -p dif-core --features native --show-missing-lines
 
+# Same as `cov`, but names the exact uncovered lines per file (no features).
+cov-missing:
+    cargo llvm-cov -p dif-core --show-missing-lines
+
+# Same as `cov-std`, but names the exact uncovered lines per file.
+cov-std-missing:
+    cargo llvm-cov -p dif-core --features std --show-missing-lines
+
+# Same as `cov-encode`, but names the exact uncovered lines per file.
+cov-encode-missing:
+    cargo llvm-cov -p dif-core --features encode --show-missing-lines
+
 # dif-core line coverage with std coverage
 cov-encode:
     cargo llvm-cov -p dif-core --features encode

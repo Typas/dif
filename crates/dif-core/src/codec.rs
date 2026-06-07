@@ -376,11 +376,11 @@ fn zstd_compress(data: &[u8], level: i32, workers: u32, job_size: Option<u32>) -
             .map_err(|_| DifError::CompressionFailed)?;
         // `J`: the scheduler-chosen per-job size; overrides zstd's ~1 MB floor so
         // the in-frame split is the controlled, ratio-bounded one.
-        if let Some(js) = job_size {
-            if js > 0 {
-                cctx.set_parameter(CParameter::JobSize(js))
-                    .map_err(|_| DifError::CompressionFailed)?;
-            }
+        if let Some(js) = job_size
+            && js > 0
+        {
+            cctx.set_parameter(CParameter::JobSize(js))
+                .map_err(|_| DifError::CompressionFailed)?;
         }
         let mut out = alloc::vec![0u8; zstd_safe::compress_bound(data.len())];
         let n = cctx
@@ -785,6 +785,53 @@ mod tests {
             }],
             replay_count: 1,
         }
+    }
+
+    // A codec whose backend is not compiled into this feature set must surface a
+    // clean error from both halves of its stub, never panic. Each block only
+    // compiles when the corresponding stub is the one in the build.
+    #[test]
+    fn unavailable_codec_backends_error() {
+        #[allow(unused_variables)]
+        let data = b"some bytes that will not actually be compressed";
+        #[cfg(not(feature = "std"))]
+        {
+            assert!(compress(Method::Brotli, 5, data, 0).is_err());
+            assert!(decompress(Method::Brotli, data, data.len()).is_err());
+        }
+        #[cfg(not(feature = "c-codecs"))]
+        {
+            assert!(compress(Method::Zstd, 3, data, 0).is_err());
+            assert!(decompress(Method::Zstd, data, data.len()).is_err());
+            assert!(compress(Method::Lzav, 1, data, 0).is_err());
+            assert!(decompress(Method::Lzav, data, data.len()).is_err());
+        }
+        #[cfg(not(feature = "bsc"))]
+        {
+            assert!(compress(Method::Bsc, 2, data, 0).is_err());
+            assert!(decompress(Method::Bsc, data, data.len()).is_err());
+        }
+    }
+
+    // frame_count < workers takes the in-frame-split planning branch (per-frame
+    // `k`), which the native-only split tests cover with zstd/brotli. Repeat it
+    // with a portable codec so every feature set exercises that branch too.
+    #[test]
+    fn fewer_frames_than_workers_plans_split_branch() {
+        let mut img = sample(ColorDepth::Rgba8, IndexWidth::Bit8);
+        img.frames = vec![
+            Frame {
+                delay_us: 0,
+                indices: vec![0u64; 16],
+            },
+            Frame {
+                delay_us: 0,
+                indices: vec![1u64; 16],
+            },
+        ];
+        let bytes =
+            to_dif_workers(&img, Codec::store(), Codec::store(), Codec::store(), 8).unwrap();
+        assert_eq!(from_dif(&bytes).unwrap(), img);
     }
 
     #[test]

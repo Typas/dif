@@ -576,6 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn equal_frequency_colors_tie_break_by_key() {
+        let lo = [1u8, 2, 3, 255];
+        let hi = [9u8, 8, 7, 255];
+        // Each color appears exactly twice, so the frequency compare ties and the
+        // order falls to the key tie-break (ascending): `lo` before `hi`.
+        let rgba: Vec<u8> = [hi, lo, hi, lo].concat();
+        let (img, quantized) = indexed_from_rgba8(2, 2, &rgba, None).unwrap();
+        assert!(quantized.is_none());
+        let (palette, _) = parts(&img);
+        assert_eq!(palette[0], Rgba::new(1, 2, 3, 255));
+        assert_eq!(palette[1], Rgba::new(9, 8, 7, 255));
+    }
+
+    #[test]
+    fn frame_count_reports_number_of_frames() {
+        let rgba = [0u8; 16]; // 2x2, single color
+        let (img, _) = indexed_from_rgba8(2, 2, &rgba, None).unwrap();
+        assert_eq!(img.frame_count(), 1);
+        assert_eq!(img.frame_count(), img.frames.len());
+    }
+
+    #[test]
     fn for_count_suggests_smallest_holding_width() {
         assert_eq!(IndexWidth::for_count(256), IndexWidth::Bit8);
         assert_eq!(IndexWidth::for_count(257), IndexWidth::Bit16);
@@ -614,7 +636,7 @@ mod tests {
 
     /// Build an `(side*side)`-pixel image whose every pixel is a distinct color
     /// (so unique-color count == pixel count), with `a` cycling so alpha varies.
-    #[cfg(test)]
+    #[cfg(feature = "encode")]
     fn distinct_colors(side: u32) -> Vec<u8> {
         let mut rgba = Vec::with_capacity((side * side * 4) as usize);
         for i in 0..(side * side) {

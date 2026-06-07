@@ -206,3 +206,26 @@ pub fn quantize_oklab(counts: &mut FxHashMap<u32, u32>, capacity: usize) -> FxHa
     }
     subst
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(key: u32, freq: u32) -> Item {
+        Item {
+            key,
+            freq,
+            coord: coord_of(key),
+        }
+    }
+
+    #[test]
+    fn heapbox_eq_matches_on_range_and_min_key() {
+        let items = [item(0x0000_00ff, 1), item(0x00ff_ffff, 1)];
+        let a = HeapBox::new(&items, alloc::vec![0, 1]);
+        let b = HeapBox::new(&items, alloc::vec![0, 1]);
+        let single = HeapBox::new(&items, alloc::vec![0]);
+        assert!(a.eq(&b));
+        assert!(!a.eq(&single));
+    }
+}

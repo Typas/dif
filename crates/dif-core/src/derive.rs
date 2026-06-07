@@ -180,4 +180,12 @@ mod tests {
             [255, 255, 255]
         );
     }
+
+    #[test]
+    fn strategy_from_name_parses_known_and_rejects_unknown() {
+        assert_eq!(Strategy::from_name("keep"), Ok(Strategy::Keep));
+        assert_eq!(Strategy::from_name("invert"), Ok(Strategy::Invert));
+        assert_eq!(Strategy::from_name("arithmetic"), Ok(Strategy::Arithmetic));
+        assert!(Strategy::from_name("bogus").is_err());
+    }
 }

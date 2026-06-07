@@ -49,3 +49,29 @@ impl fmt::Display for DifError {
 impl core::error::Error for DifError {}
 
 pub type Result<T> = core::result::Result<T, DifError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+
+    #[test]
+    fn every_variant_has_a_display_string() {
+        let cases = [
+            DifError::UnexpectedEof,
+            DifError::BadMagic([1, 2, 3, 4, 5, 6, 7, 8]),
+            DifError::BadVersion(9),
+            DifError::BadCodec(7),
+            DifError::BadIndexWidth(32),
+            DifError::BadColorDepth(3),
+            DifError::BadThemeCount(0),
+            DifError::BadAbilities(0x80),
+            DifError::Unaligned(7),
+            DifError::Invalid("reason"),
+            DifError::CompressionFailed,
+        ];
+        for e in &cases {
+            assert!(!format!("{e}").is_empty());
+        }
+    }
+}
