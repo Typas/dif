@@ -8,7 +8,7 @@ Implemented (core + in-frame split). Inter-frame parallel encode, parallel decod
 zstd/brotli in-frame split (`k`-rule, jobSize `J`) are wired in `crates/dif-core/src/codec.rs`
 (`compress_frames`, `parallel_map`, `from_dif_workers`) and exposed via the `--threads` CLI
 flag. Deferred: tail-wave backfill (look-ahead indexing, `codec_frame` level bump) and the
-ratio/speed mode flags. Note: the per-family table below understated brotli — `brotli-mt`'s
+ratio/speed mode flags. Note: the per-family table below understated brotli --- `brotli-mt`'s
 `compress_multi` is a single-blob native-MT path, so brotli (`level >= 10`) is also
 split-eligible (at a higher ratio cost than zstd, so biased conservative), not `k = 1`.
 
@@ -243,7 +243,7 @@ policies agree: bias hard to inter-frame.
 
 ## Worklog
 
-### 2026-06-04 — core + in-frame split landed
+### 2026-06-04 --- core + in-frame split landed
 
 Shipped the inter-frame scheduler, parallel decode, and the in-frame split fallback. All
 `just build`/`build-std`/`build-native`, `just test` (23), `just py-test` (64), `just clippy`,
@@ -252,25 +252,25 @@ and `just py-lint` pass. Coverage: Rust 93.5% line (`just cov`), Python 85% (`ju
 **Built**
 
 - `crates/dif-core/src/codec.rs`:
-  - `parallel_map(n, threads, f)` — `std`-gated bounded pool (`std::thread::scope` + an
+  - `parallel_map(n, threads, f)` --- `std`-gated bounded pool (`std::thread::scope` + an
     `AtomicUsize` work-queue), serial fallback under no_std or `threads < 2`. Results indexed
     by item, so output is byte-identical to serial regardless of thread count.
-  - `compress_frames` — replaces the serial frame loop. `frame_count >= T` → pure inter-frame
-    (`k = 1`, each codec serial via `workers = 0`); `frame_count < T` → split each frame
+  - `compress_frames` --- replaces the serial frame loop. `frame_count >= T` -> pure inter-frame
+    (`k = 1`, each codec serial via `workers = 0`); `frame_count < T` -> split each frame
     `k = min(ceil(T/n), floor(S/J))`, one thread per frame.
-  - `compress_frame` — split dispatch: zstd (`NbWorkers = k` + new `CParameter::JobSize(J)`),
-    brotli (`workers = k`, level ≥ 10 → `compress_multi`), all others forced `k = 1`.
+  - `compress_frame` --- split dispatch: zstd (`NbWorkers = k` + new `CParameter::JobSize(J)`),
+    brotli (`workers = k`, level >= 10 -> `compress_multi`), all others forced `k = 1`.
   - `zstd_compress` gained a `job_size: Option<u32>` arg; decode loop now runs through
     `parallel_map`; new public `from_dif_workers(bytes, workers)` (`from_dif` stays serial).
-- Bindings/CLI: `--threads` flag (default **1**) → `to_dif(workers)`; `from_dif(data,
+- Bindings/CLI: `--threads` flag (default **1**) -> `to_dif(workers)`; `from_dif(data,
   workers=1)`; stub + `convert.py`/`__main__.py` plumbing.
 - `justfile`: added `cov-missing` (line-level gap report).
 
 **Deviations from the design above**
 
 - **Brotli is split-eligible too**, not zstd-only. `brotli-mt`'s `compress_multi` emits a
-  single decodable blob (parallel meta-blocks), so brotli at `level ≥ 10` takes `k > 1` (at a
-  higher ratio cost than zstd — 16 MB window — so biased conservative). The "Per-family
+  single decodable blob (parallel meta-blocks), so brotli at `level >= 10` takes `k > 1` (at a
+  higher ratio cost than zstd --- 16 MB window --- so biased conservative). The "Per-family
   in-frame feasibility" section above understates this; treat that table as superseded.
 - **Threading is a bounded `std::thread::scope` pool, not literal `T`-frame waves.** The
   `k`-rule is applied globally (all frames equal size), which collapses to the same allocation
@@ -284,7 +284,7 @@ and `just py-lint` pass. Coverage: Rust 93.5% line (`just cov`), Python 85% (`ju
 **Deferred** (not in this pass): tail-wave backfill (look-ahead indexing, `codec_frame` level
 bump), ratio/speed mode flags, exposing `J` as a knob, and calibrating `J` against the corpus.
 
-**Tests added** (`codec.rs` + `py/tests/test_codec.py`): serial⇄parallel encode/decode byte
+**Tests added** (`codec.rs` + `py/tests/test_codec.py`): serial<=>parallel encode/decode byte
 parity; zstd and brotli in-frame-split blob roundtrips; no-split-codec roundtrip under thread
 pressure; corrupt-frame-record rejection on both serial and parallel decode (error
 propagation through the pool); Python multi-frame `--threads` parity.

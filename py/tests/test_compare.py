@@ -30,7 +30,7 @@ def _toy_png(path):
 
 def test_compare_image_covers_png_and_dif(tmp_path):
     p = _toy_png(tmp_path / "d.png")
-    rows = compare_image(p, repeats=1, dif_codecs=("zstd-3", "brotli-5"))
+    rows = compare_image(p, repeats=1, outer_codecs=("zstd-3", "brotli-5"))
     by_name = {r.name: r for r in rows}
 
     # PNG is the rel reference: present, lossless, non-empty.
@@ -70,7 +70,7 @@ def test_dif_palette_frame_cartesian(tmp_path):
     rows = compare_image(
         p,
         repeats=1,
-        dif_codecs=("zstd-3",),
+        outer_codecs=("zstd-3",),
         palette_codecs=("store", "libdeflate-6"),
         frame_codecs=("store",),
     )
@@ -83,14 +83,14 @@ def test_unavailable_codec_is_annotated_not_raised(tmp_path):
     # A bogus DIF codec name fails inside the measured closure; the row comes
     # back available=False with a note instead of bubbling an exception.
     p = _toy_png(tmp_path / "d.png")
-    rows = compare_image(p, repeats=1, dif_codecs=("not-a-codec",))
+    rows = compare_image(p, repeats=1, outer_codecs=("not-a-codec",))
     bad = next(r for r in rows if r.name == "dif-not-a-codec-zst16-zst10-8b")
     assert not bad.available and bad.note
 
 
 def test_tables_and_tsv_rows(tmp_path):
     p = _toy_png(tmp_path / "d.png")
-    rows = compare_image(p, repeats=1, dif_codecs=("zstd-3",))
+    rows = compare_image(p, repeats=1, outer_codecs=("zstd-3",))
 
     table = format_table(p, rows)
     assert "format" in table and "png" in table
@@ -104,8 +104,8 @@ def test_subdir_stats_aggregates(tmp_path):
     a = _toy_png(tmp_path / "one.png")
     b = _toy_png(tmp_path / "two.png")
     reports = [
-        (str(a), compare_image(a, repeats=1, dif_codecs=("zstd-3",))),
-        (str(b), compare_image(b, repeats=1, dif_codecs=("zstd-3",))),
+        (str(a), compare_image(a, repeats=1, outer_codecs=("zstd-3",))),
+        (str(b), compare_image(b, repeats=1, outer_codecs=("zstd-3",))),
     ]
     blocks = subdir_stats(reports)
     assert blocks
@@ -118,7 +118,7 @@ def test_subdir_stats_aggregates(tmp_path):
 
 def test_dif_only_store_baseline(tmp_path):
     p = _toy_png(tmp_path / "d.png")
-    rows = compare_image(p, repeats=1, dif_codecs=("zstd-3",), dif_only=True)
+    rows = compare_image(p, repeats=1, outer_codecs=("zstd-3",), dif_only=True)
 
     names = [r.name for r in rows]
     # No non-DIF formats.
@@ -136,7 +136,7 @@ def test_dif_only_store_baseline(tmp_path):
 
 def test_dif_only_tsv_has_m_column(tmp_path):
     p = _toy_png(tmp_path / "d.png")
-    rows = compare_image(p, repeats=1, dif_codecs=("zstd-3",), dif_only=True)
+    rows = compare_image(p, repeats=1, outer_codecs=("zstd-3",), dif_only=True)
     tsv = list(iter_rows(p, rows))
     assert all(len(t) == len(TSV_HEADER) for t in tsv)
     # M column (index 6) is non-empty for available rows.
@@ -147,8 +147,8 @@ def test_dif_only_aggregate_sorts_by_m(tmp_path):
     a = _toy_png(tmp_path / "one.png")
     b = _toy_png(tmp_path / "two.png")
     reports = [
-        (str(a), compare_image(a, repeats=1, dif_codecs=("zstd-3",), dif_only=True)),
-        (str(b), compare_image(b, repeats=1, dif_codecs=("zstd-3",), dif_only=True)),
+        (str(a), compare_image(a, repeats=1, outer_codecs=("zstd-3",), dif_only=True)),
+        (str(b), compare_image(b, repeats=1, outer_codecs=("zstd-3",), dif_only=True)),
     ]
     _, stats = subdir_stats(reports)[0]
     md = format_stats_table(stats)

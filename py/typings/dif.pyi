@@ -28,14 +28,14 @@ def derive_dark_base_color(base: Rgb, strategy: Strategy) -> Rgb:
 # Any codec variant string the core `Codec::parse` accepts: a bare family aliasing
 # its study-chosen default level (`zstd`->3, `brotli`->5, `deflate`->6, `lz4`->fast1,
 # `lzav`->1, `bsc`->2) or `family-level` for any in-table level (`zstd-3`, `zstd--7`,
-# `lz4-hc10`, `lzav-2`, `store`, …). The set is open, so this is just `str`; see
+# `lz4-hc10`, `lzav-2`, `store`, ...). The set is open, so this is just `str`; see
 # crates/dif-core Codec::parse for the truth, and `dif.validate_codec` to check one.
 CodecName = str
 
 def validate_codec(name: str) -> None:
     """Validate a codec variant string against the core `Codec::parse` (the single
     source of truth) without encoding; raises `ValueError` on an unknown variant or
-    level. Lets the benchmark reject a bad `--dif-codecs` spec before the run."""
+    level. Lets the benchmark reject a bad `--outer-codecs` spec before the run."""
     ...
 
 class Image:

@@ -76,7 +76,7 @@ class DifEditorProvider implements vscode.CustomReadonlyEditorProvider {
     const viewer = uri("viewer.js");
     // The decoder is built for wasm32-wasip1 (so the C codecs zstd/lzav get
     // wasi-libc's malloc); its JS glue imports `wasi_snapshot_preview1`. An
-    // import map resolves that bare specifier to a no-op shim — the decode path
+    // import map resolves that bare specifier to a no-op shim --- the decode path
     // does no I/O, so nothing in it runs (mirrors web/index.html).
     const wasiShim = uri("wasi_shim.js");
     const n = nonce();

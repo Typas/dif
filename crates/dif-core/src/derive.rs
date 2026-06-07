@@ -9,7 +9,7 @@
 //! Three strategies (see [`Strategy`]):
 //! - `Keep`       : dark theme identical to the source.
 //! - `Invert`     : photographic negative (`max - channel`), alpha kept.
-//! - `Arithmetic` : perceptual OKLab — achromatic colors flip lightness
+//! - `Arithmetic` : perceptual OKLab --- achromatic colors flip lightness
 //!   (`L' = 1 - L`, white<->black) while chromatic colors keep hue and are
 //!   tone-compressed into the dark band, then OKLCh-chroma gamut-mapped into sRGB
 //!   so a light high-chroma color (e.g. yellow) stays a visible muted version of
@@ -70,8 +70,8 @@ fn arithmetic_rgb(r: u16, g: u16, b: u16, max: f64) -> (u16, u16, u16) {
     };
     let base: Oklch<f64> = Oklab::new(new_l, lab.a, lab.b).into_color();
 
-    // Reduce OKLCh chroma until the color fits sRGB. The common case — every
-    // achromatic/gray color, plus most tone-compressed ones — already fits, so
+    // Reduce OKLCh chroma until the color fits sRGB. The common case --- every
+    // achromatic/gray color, plus most tone-compressed ones --- already fits, so
     // skip the search and keep full chroma (`k = 1`). Otherwise binary-search the
     // largest scale `k in [0,1]` that stays in gamut (shrinking toward (L, hue)).
     let in_gamut = |k: f64| -> bool {

@@ -2,7 +2,7 @@
 //
 // The decoder is compiled to wasm32-wasip1 so the C codecs (zstd, lzav) link
 // against wasi-libc's malloc. The wasm module therefore *imports* a few wasi
-// functions that Rust's std runtime references — but the decode path does no
+// functions that Rust's std runtime references --- but the decode path does no
 // I/O and the module is a cdylib (no `main`), so none of these run during
 // instantiation or decoding. They exist only to satisfy the imports; the only
 // ones a fault could reach are fd_write / proc_exit on a panic.
@@ -25,5 +25,5 @@ export function fd_write() {
 
 // Reachable only on abort/panic. Surface it instead of silently continuing.
 export function proc_exit(code) {
-  throw new Error(`wasm proc_exit(${code}) — decoder aborted`);
+  throw new Error(`wasm proc_exit(${code}) --- decoder aborted`);
 }

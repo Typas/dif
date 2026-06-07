@@ -3,7 +3,7 @@
 //! 3); not built in the portable no_std/wasm tier. CPU single-thread BWT.
 //!
 //! Every blob carries a 1-byte tag (libbsc block vs. stored-raw), so decode only
-//! needs the known `raw_len` — matching dif's other section codecs.
+//! needs the known `raw_len` --- matching dif's other section codecs.
 
 use std::os::raw::{c_int, c_uchar};
 

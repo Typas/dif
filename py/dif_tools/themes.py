@@ -4,8 +4,8 @@ A single-theme source image must synthesize its alternate (dark) theme. Three
 strategies, matching the project spec:
 
 - ``keep``       : alternate theme identical to the source (theme-agnostic).
-- ``invert``     : photographic negative — ``max - value`` per channel.
-- ``arithmetic`` : perceptual OKLab dark-theme derivation — achromatic colors
+- ``invert``     : photographic negative --- ``max - value`` per channel.
+- ``arithmetic`` : perceptual OKLab dark-theme derivation --- achromatic colors
                    flip lightness (white<->black) while chromatic colors keep
                    hue and are tone-compressed into the dark band (so a light
                    color like yellow stays a visible muted color, not black),
@@ -16,7 +16,7 @@ identity, so decoding the source theme reproduces the original pixels exactly.
 
 The derivation itself lives in Rust (``dif`` extension, OKLab via the ``palette``
 crate); these helpers are thin wrappers so Python callers/tests share that single
-implementation. The converter doesn't use them — it calls ``Image.add_dark_theme``
+implementation. The converter doesn't use them --- it calls ``Image.add_dark_theme``
 so no palette crosses the FFI boundary.
 """
 

@@ -3,7 +3,7 @@
 //!
 //! A codec byte packs a 4-bit **family** and a 4-bit **level index** into a
 //! per-family level table (so e.g. `zstd-22`, which overflows 4 raw bits, is
-//! reachable as a table index). Family 0 is `common-pick` — a benchmark-derived
+//! reachable as a table index). Family 0 is `common-pick` --- a benchmark-derived
 //! table of recommended presets; `0/0` is `Store`.
 //!
 //! Encoding builds the *fully-decompressed* sections (themes, palettes, index
@@ -13,7 +13,7 @@
 //! the header offsets index frames directly for random-access / low-memory decode.
 //!
 //! Decode is level-agnostic: every supported codec's stream is self-describing,
-//! so only the family (→ method) and the known raw length are needed.
+//! so only the family (-> method) and the known raw length are needed.
 
 use alloc::vec::Vec;
 
@@ -68,7 +68,7 @@ const BROTLI_LEVELS: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 // all over a BWT block. Provenance + the value the shim maps to a coder.
 const BSC_LEVELS: [i32; 3] = [1, 2, 3];
 const ZSTD_LEVELS: [i32; 16] = [-7, -5, -3, -1, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 22];
-// LZ4: sign aligned with Zstandard (negative = fast) — negative = `lz4_flex` fast
+// LZ4: sign aligned with Zstandard (negative = fast) --- negative = `lz4_flex` fast
 // acceleration (|level| = accel), positive = HC level. Provenance only; `lz4_flex`
 // exposes the fast block path, so the encoder ignores the value.
 const LZ4_LEVELS: [i32; 16] = [
@@ -85,7 +85,7 @@ impl Codec {
         Codec(((family as u8) << 4) | (level_index & 0xF))
     }
 
-    /// `Store` — common-pick family, level 0.
+    /// `Store` --- common-pick family, level 0.
     pub fn store() -> Self {
         Codec(0x00)
     }
@@ -116,7 +116,7 @@ impl Codec {
     }
 
     /// Parse a study variant string (`"store"`, `"zstd-3"`, `"brotli-11"`,
-    /// `"lz4-fast1"`, `"lzav-1"`, `"libdeflate-6"`, …) into a codec byte. Bare
+    /// `"lz4-fast1"`, `"lzav-1"`, `"libdeflate-6"`, ...) into a codec byte. Bare
     /// family names alias their study-chosen default level. Single source of truth
     /// for the per-family level semantics shared with the Python binding.
     pub fn parse(name: &str) -> Result<Codec> {
@@ -507,11 +507,11 @@ fn compress_frame(codec: Codec, raw: &[u8], workers: u32, job_size: u32) -> Resu
 
 /// Compress every frame's index plane, returning blobs indexed by frame.
 ///
-/// `frame_count >= workers`: pure inter-frame — `min(workers, n)` threads, each
+/// `frame_count >= workers`: pure inter-frame --- `min(workers, n)` threads, each
 /// frame compressed serially (`k = 1`), zero ratio loss. `frame_count < workers`:
 /// too few frames to fill the pool, so each frame is split `k`-ways
 /// (`k = min(ceil(T/n), floor(S/J))`, capped by family eligibility inside
-/// [`compress_frame`]), one thread per frame, so live threads ≈ `n * k ≈ T`.
+/// [`compress_frame`]), one thread per frame, so live threads ~ `n * k ~ T`.
 fn compress_frames(
     frames: &[Frame],
     iw: IndexWidth,
@@ -708,7 +708,7 @@ pub fn to_dif(img: &DifImage, outer: Codec, palette: Codec, frame: Codec) -> Res
 }
 
 /// Like [`to_dif`], but `workers` > 0 runs the multithreaded zstd/brotli encoders
-/// (other codecs ignore it). `workers` is encode-only — not stored — and the bytes
+/// (other codecs ignore it). `workers` is encode-only --- not stored --- and the bytes
 /// stay a standard container decoded by [`from_dif`].
 pub fn to_dif_workers(
     img: &DifImage,

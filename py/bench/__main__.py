@@ -40,7 +40,7 @@ _IMAGE_EXTS = {
 def _images(passed: list[str]) -> list[str]:
     """Expand each path: a directory yields its images, a file passes through.
 
-    No default — the caller must name the images (or a dir of them).
+    No default --- the caller must name the images (or a dir of them).
     """
     out: list[str] = []
     for raw in passed:
@@ -56,7 +56,7 @@ def _codecs(s: str) -> list[str]:
     """Parse an lzbench `-e` codec spec into a flat list of DIF variant strings.
 
     `/` separates codecs, `,` enumerates levels of the preceding family:
-    `family,L1,L2…` -> `family-L1`, `family-L2`, … (`brotli,5,11` -> `brotli-5`,
+    `family,L1,L2...` -> `family-L1`, `family-L2`, ... (`brotli,5,11` -> `brotli-5`,
     `brotli-11`; `zstd,3,22` -> `zstd-3`, `zstd-22`; `lz4,fast1,hc10` -> `lz4-fast1`,
     `lz4-hc10`). A bare family with no comma is its default level (`zstd`, `store`).
     `/` is never part of a codec name, so `--flag=a/b,1` parses and stays clear of
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="lzbench-spec",
         help="select standalone codecs to bench, same lzbench `-e` syntax as "
-        "--dif-codecs: `/` separates families, `,` enumerates levels (default: the "
+        "--outer-codecs: `/` separates families, `,` enumerates levels (default: the "
         "whole registry), e.g. --codecs=zstd,3,10/bsc,b25m0e0,b1m3e2/lzav. Matches "
         "the names shown in the table (with bsc->libbsc, deflate->libdeflate "
         "aliases). libbsc levels are bsc-CLI knobs `b<MB>m<n>e<n>`: b=block size "
@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         "2=adaptive); any combo builds on demand",
     )
     c.add_argument(
-        "--numthreads",
+        "--num-threads",
         type=int,
         default=1,
         help="codec threads (default 1 = single-thread). >1 uses each codec's "
@@ -158,42 +158,42 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("images", nargs="*")
     f.add_argument("--repeats", type=int, default=3)
     f.add_argument(
-        "--numthreads",
+        "--num-threads",
         type=int,
         default=1,
         help="codec threads (default 1 = 1-core comparison); >1 adds dif -mt rows "
         "and scales jxl/avif and brotli (zstd barely splits)",
     )
     f.add_argument(
-        "--dif-codecs",
+        "--outer-codecs",
         type=_codecs,
         default=[DIF_TRIPLET[0]],
         metavar="lzbench-spec",
         help="outer DIF codec variants, lzbench `-e` syntax: `/` separates codecs, "
         f"`,` enumerates levels of the preceding family (default: {DIF_TRIPLET[0]}, "
-        "the shipped triplet's outer), e.g. --dif-codecs=zstd,3/brotli,5,11/store",
+        "the shipped triplet's outer), e.g. --outer-codecs=zstd,3/brotli,5,11/store",
     )
     f.add_argument(
-        "--dif-palette-codecs",
+        "--palette-codecs",
         type=_codecs,
         default=[DIF_TRIPLET[1]],
         metavar="lzbench-spec",
-        help="palette-section codecs, same `/`,`,` syntax as --dif-codecs "
-        f"(default: {DIF_TRIPLET[1]}); a list runs the cartesian product with --dif-codecs",
+        help="palette-section codecs, same `/`,`,` syntax as --outer-codecs "
+        f"(default: {DIF_TRIPLET[1]}); a list runs the cartesian product with --outer-codecs",
     )
     f.add_argument(
-        "--dif-frame-codecs",
+        "--frame-codecs",
         type=_codecs,
         default=[DIF_TRIPLET[2]],
         metavar="lzbench-spec",
-        help="frame-section codecs, same `/`,`,` syntax as --dif-codecs "
-        f"(default: {DIF_TRIPLET[2]}); a list runs the cartesian product with --dif-codecs",
+        help="frame-section codecs, same `/`,`,` syntax as --outer-codecs "
+        f"(default: {DIF_TRIPLET[2]}); a list runs the cartesian product with --outer-codecs",
     )
     f.add_argument(
         "--index-width",
         type=_index_widths,
         default=["auto"],
-        metavar="auto|8|16[/…]",
+        metavar="auto|8|16[/...]",
         help="`/`-separated DIF index width(s): auto-fit (default), or force 8/16-bit "
         "(quantizes to fit). Multiple values enumerate a dif row set per width. The "
         "resolved width shows in each row label as -8b/-16b",
@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "codecs":
         try:
-            selected = select_codecs(args.codecs, args.numthreads)  # validate early
+            selected = select_codecs(args.codecs, args.num_threads)  # validate early
         except ValueError as e:
             ap.error(str(e))
         # Some libbsc block sorters (ST7/ST8 = -m7/-m8) compile but need CUDA at
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, reason in unavailable:
                 print(f"  {name}: {reason}")
             return 1
-        reports = run(imgs, args.strategy, args.repeats, args.numthreads, args.codecs)
+        reports = run(imgs, args.strategy, args.repeats, args.num_threads, args.codecs)
 
         # Per-image rows -> TSV (machine-parseable detail).
         with open(args.out, "w", newline="") as fh:
@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
         _check_codecs(
-            ap, args.dif_codecs, args.dif_palette_codecs, args.dif_frame_codecs
+            ap, args.outer_codecs, args.palette_codecs, args.frame_codecs
         )
         print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
         reports: list[cmp.ImageRows] = []
@@ -304,11 +304,11 @@ def main(argv: list[str] | None = None) -> int:
                 rows = compare_image(
                     p,
                     args.repeats,
-                    args.dif_codecs,
-                    args.dif_palette_codecs,
-                    args.dif_frame_codecs,
+                    args.outer_codecs,
+                    args.palette_codecs,
+                    args.frame_codecs,
                     stream=True,
-                    numthreads=args.numthreads,
+                    num_threads=args.num_threads,
                     index_widths=args.index_width,
                     dif_only=args.dif_only,
                 )

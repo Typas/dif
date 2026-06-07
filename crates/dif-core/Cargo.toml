@@ -10,7 +10,7 @@ description = "Core codec for the DIF (Diagram Image Format): theme-aware, lossl
 # targets with no native dependencies.
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 # LZ4 (lz4_flex) is pure-Rust no_std+alloc, so it stays in the portable set and
-# decodes in the wasm build. `frame` feature off → raw block API with known raw_len.
+# decodes in the wasm build. `frame` feature off -> raw block API with known raw_len.
 lz4_flex = { version = "0.13", default-features = false }
 
 # Brotli needs std (its streaming Reader/Writer API); gated behind the `std` feature.
@@ -34,7 +34,7 @@ lzav-shim = { path = "../lzav-shim", optional = true }
 libbsc-shim = { path = "../libbsc-shim", optional = true }
 # OKLab/OKLCh color math for the encode-side dark-theme derivation (`encode`
 # feature). f64-generic, so it reproduces the numpy reference within rounding.
-# Encode-only — gated out of the no_std core and the wasm decoder.
+# Encode-only --- gated out of the no_std core and the wasm decoder.
 palette = { version = "0.7.6", optional = true }
 
 [features]
@@ -46,7 +46,7 @@ std = ["dep:brotli", "dep:rustc-hash"]
 # cross-compiled to wasm via zig for the browser decoder (see `wasm-native`).
 c-codecs = ["std", "dep:zstd-safe", "dep:lzav-shim"]
 # Multithreaded zstd encode (nbWorkers). Pulls pthread into libzstd, so it is
-# host-only — kept OFF the wasm-native decoder. Output is a standard zstd frame,
+# host-only --- kept OFF the wasm-native decoder. Output is a standard zstd frame,
 # decoded by the normal single-thread path; no format/version change.
 zstd-mt = ["c-codecs", "zstd-safe/zstdmt"]
 # Multithreaded brotli encode (`compress_multi`, std::thread). Host-only (kept

@@ -3,7 +3,7 @@
 Reads an image with Pillow as RGBA8, builds the palette/index natively,
 synthesizes the dark theme with the chosen strategy, and encodes via the Rust
 ``dif`` module. The *source* (light) theme is always stored as the lossless
-identity. v3 is indexed-only — there is no grayscale mode.
+identity. v3 is indexed-only --- there is no grayscale mode.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def resolve_raster(path: str | Path) -> Path:
 
         png = _DRAWIO_PNG_CACHE / (path.stem + ".png")
         # Reuse a cached render unless the source is newer (rendering shells out
-        # to the drawio container/desktop — tens of seconds; benches re-resolve
+        # to the drawio container/desktop --- tens of seconds; benches re-resolve
         # the same diagram repeatedly).
         if png.exists() and png.stat().st_mtime >= path.stat().st_mtime:
             return png
@@ -81,7 +81,7 @@ def dif_image_from_array(
     """Build a :class:`dif.Image` from an already-loaded ``(H, W, 4)`` RGBA8 array.
 
     Splits the in-memory build (palette/index + dark-theme synthesis) from disk
-    I/O so callers that already hold the pixels — e.g. the format benchmark —
+    I/O so callers that already hold the pixels --- e.g. the format benchmark ---
     can time *raw bitmap -> file* without re-reading the source. ``strategy``
     ``"keep"`` stores a single (light) theme; any other adds the dark theme.
     ``index_width`` is ``"auto"`` (smallest fitting width, quantizing only above
@@ -91,8 +91,8 @@ def dif_image_from_array(
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
     iw = _index_width_arg(index_width)
 
-    # Hand the raw bitmap to Rust and build the palette/index natively — like
-    # `png_encode(arr)` — instead of running `np.unique`/`.tolist()` over millions
+    # Hand the raw bitmap to Rust and build the palette/index natively --- like
+    # `png_encode(arr)` --- instead of running `np.unique`/`.tolist()` over millions
     # of pixels and marshalling a per-pixel list across PyO3 (that pixel work was
     # ~99% of DIF encode time).
     h, w = arr.shape[:2]
@@ -123,7 +123,7 @@ def convert_file(
 
     ``codec`` is the outer whole-body codec; ``palette_codec``/``frame_codec``
     compress the palette and per-frame sections. The defaults are the shipped
-    triplet — outer ``"store"`` (keeps frames seekable for random-access /
+    triplet --- outer ``"store"`` (keeps frames seekable for random-access /
     low-memory decode), palette ``"zstd-16"``, frame ``"zstd-10"``. Each is one
     of the study's variant strings (e.g. ``"zstd-3"``, ``"brotli-11"``,
     ``"lz4-fast1"``); see :data:`dif.CodecName`.

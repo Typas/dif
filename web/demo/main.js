@@ -32,7 +32,7 @@ async function main() {
 
   const modeLabel = document.getElementById("mode");
   const info = document.getElementById("info");
-  info.textContent = `${img.width}×${img.height}, themes: ${img.themesDescription().split("\n").join(", ")}`;
+  info.textContent = `${img.width}*${img.height}, themes: ${img.themesDescription().split("\n").join(", ")}`;
 
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   let override = null; // null = follow OS; otherwise "light" | "dark"

@@ -1,4 +1,4 @@
-//! Core codec for **DIF v3** — the Diagram Image Format.
+//! Core codec for **DIF v3** --- the Diagram Image Format.
 //!
 //! DIF is a lossless, theme-aware, palette-indexed raster format. A single file
 //! carries one or more *themes*; each theme is a full palette plus an
@@ -78,7 +78,7 @@ impl ThemeTag {
 /// All four widths the flags byte can encode are named, but only 8- and 16-bit are
 /// supported by this build (see [`IndexWidth::supported`]); a [`DifImage`] carrying
 /// [`Bit32`](IndexWidth::Bit32)/[`Bit64`](IndexWidth::Bit64) is rejected by
-/// [`DifImage::validate`]. The encoder never produces them — it quantizes down to
+/// [`DifImage::validate`]. The encoder never produces them --- it quantizes down to
 /// the widest supported width instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IndexWidth {
@@ -98,8 +98,8 @@ impl IndexWidth {
             IndexWidth::Bit64 => 8,
         }
     }
-    /// Number of distinct indices representable (`256`, `65536`, `1<<32`, or — for
-    /// 64-bit — `u64::MAX`, capped to avoid overflowing the `u64` count space).
+    /// Number of distinct indices representable (`256`, `65536`, `1<<32`, or --- for
+    /// 64-bit --- `u64::MAX`, capped to avoid overflowing the `u64` count space).
     pub fn capacity(self) -> u64 {
         match self {
             IndexWidth::Bit8 => 256,
@@ -132,7 +132,7 @@ impl IndexWidth {
             _ => IndexWidth::Bit64,
         })
     }
-    /// The smallest width that *would* hold `count` colors — a suggestion, not a
+    /// The smallest width that *would* hold `count` colors --- a suggestion, not a
     /// guarantee it is supported. The encoder uses this to learn the natural width
     /// and, when it exceeds the widest supported width, quantizes down to fit.
     pub fn for_count(count: u64) -> Self {
@@ -195,7 +195,7 @@ impl ColorDepth {
 /// [`DifImage::palettes`] at the matching index.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Theme {
-    /// Capability bits — see [`abilities`].
+    /// Capability bits --- see [`abilities`].
     pub abilities: u8,
     /// The scheme's base (background) color, RGB8, used to tie-break the pick.
     pub base_color: [u8; 3],
@@ -389,8 +389,8 @@ impl DifImage {
 /// (quantizing down whenever the source has more colors than `w` can index). A
 /// forced unsupported width (`Bit32`/`Bit64`) is an error.
 ///
-/// Returns the image plus `Some(n)` when the palette was quantized — `n` is the
-/// source's unique-color count before reduction — or `None` when it fit losslessly.
+/// Returns the image plus `Some(n)` when the palette was quantized --- `n` is the
+/// source's unique-color count before reduction --- or `None` when it fit losslessly.
 pub fn indexed_from_rgba8(
     width: u32,
     height: u32,
@@ -415,7 +415,7 @@ pub fn indexed_from_rgba8(
     }
 
     // Choose the target width: forced by `want`, else the smallest *supported*
-    // width that fits — `for_count` may suggest an unsupported 32/64-bit width,
+    // width that fits --- `for_count` may suggest an unsupported 32/64-bit width,
     // which we clamp to `Bit16` and quantize down into.
     let source = map.len() as u64;
     let index_width = match want {

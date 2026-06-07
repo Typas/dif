@@ -37,7 +37,7 @@ package = false
 
 [tool.black]
 target-version = ["py312"]
-# Vendored submodules (e.g. kanzi-cpp) ship their own .py files — never reformat them.
+# Vendored submodules (e.g. kanzi-cpp) ship their own .py files --- never reformat them.
 extend-exclude = '''/(crates/[^/]+/vendor|third_party)/'''
 
 [tool.ruff]
@@ -54,7 +54,7 @@ markers = ["slow: integration tests needing external tools (e.g. podman)"]
 source_pkgs = ["dif_tools", "bench"]
 branch = true
 # Standalone matplotlib analysis script (hyphenated, not importable, run by hand
-# on two TSVs) — not part of the library surface, so out of the coverage scope.
+# on two TSVs) --- not part of the library surface, so out of the coverage scope.
 omit = ["py/bench/bench-format-compare.py"]
 
 [tool.coverage.report]
@@ -65,6 +65,6 @@ show_missing = true
 extra-paths = ["py/typings"]
 
 [tool.ty.src]
-# Vendored submodules (e.g. kanzi-cpp) ship their own .py files — never type-check
+# Vendored submodules (e.g. kanzi-cpp) ship their own .py files --- never type-check
 # them; mirrors the black/ruff vendor excludes above.
 exclude = ["crates/*/vendor", "third_party"]

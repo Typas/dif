@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DIF — theme-aware image demo</title>
+    <title>DIF --- theme-aware image demo</title>
     <style>
       :root { color-scheme: light dark; }
       body {
@@ -27,14 +27,14 @@
   </head>
   <body>
     <h1>DIF theme-aware decoder</h1>
-    <p>Same <code>.dif</code> file, rendered for: <strong id="mode">…</strong> (follows OS theme)</p>
+    <p>Same <code>.dif</code> file, rendered for: <strong id="mode">...</strong> (follows OS theme)</p>
     <canvas id="view" width="800" height="600"></canvas>
     <div class="bar">
       <button id="toggle">Override theme</button>
       <span id="info"></span>
     </div>
     <!-- The wasm decoder is built for wasm32-wasip1 (so the C codecs zstd/lzav
-         get wasi-libc's malloc). Resolve its wasi import to a no-op shim — the
+         get wasi-libc's malloc). Resolve its wasi import to a no-op shim --- the
          codecs do no I/O, so nothing here is called on the decode path. -->
     <script type="importmap">
       { "imports": { "wasi_snapshot_preview1": "./wasi_shim.js" } }

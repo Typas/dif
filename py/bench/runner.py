@@ -65,7 +65,7 @@ def bench_image(
     path: str,
     raw: bytes,
     repeats: int = 5,
-    numthreads: int = 1,
+    num_threads: int = 1,
     codecs: list[Codec] | None = None,
 ) -> ImageReport:
     codec_w = 12
@@ -85,10 +85,10 @@ def bench_image(
         f"| {'memcpy':^{codec_w}} | {1.0:>{ratio_w}.1f} | {mem / MB:>{speed_w}.1f} | {mem / MB:>{speed_w}.1f} | {compute_m(1, 1, 1):>{score_w}.1f} | {'':>{peak_w}} |"
     )
     results: list[CodecResult] = []
-    # Standalone algorithms only (no DIF container). `numthreads > 1` selects each
+    # Standalone algorithms only (no DIF container). `num_threads > 1` selects each
     # codec's multithreaded encoder where it has one (else single-thread).
     if codecs is None:
-        codecs = all_codecs(numthreads)
+        codecs = all_codecs(num_threads)
     for codec in codecs:
         if not codec.available:
             print(f"-- WARN: {codec.name} is not available, skipped")
@@ -156,18 +156,18 @@ def run(
     paths: Sequence[str | Path],
     strategy: str = "arithmetic",
     repeats: int = 5,
-    numthreads: int = 1,
+    num_threads: int = 1,
     codec_specs: list[str] | None = None,
 ) -> list[ImageReport]:
-    # Resolve the codec selection once (same lzbench `-e` syntax as `--dif-codecs`);
+    # Resolve the codec selection once (same lzbench `-e` syntax as `--outer-codecs`);
     # None = the whole registry. Raises ValueError on an unknown codec token.
-    codecs = select_codecs(codec_specs, numthreads)
+    codecs = select_codecs(codec_specs, num_threads)
     reports: list[ImageReport] = []
     count = len(paths)
     for i, p in enumerate(paths):
         print(f"Benchmarking {p} ({i + 1}/{count}):")
         raw = image_to_dif_image(p, strategy=strategy).to_difr()
-        reports.append(bench_image(str(p), raw, repeats, numthreads, codecs))
+        reports.append(bench_image(str(p), raw, repeats, num_threads, codecs))
     return reports
 
 
@@ -265,7 +265,7 @@ def iter_rows(reports: Sequence[ImageReport]):
 
     Per image: a ``memcpy`` baseline row (``bytes`` = the raw ``.difr`` size,
     speeds = memcpy), then one row per codec whose ``bytes`` is the *compressed*
-    size — so the single ``bytes`` column shows the size difference directly.
+    size --- so the single ``bytes`` column shows the size difference directly.
     The old per-row ``difr_bytes``/``memcpy_mbps`` columns are gone (they were
     constant per image and folded into the memcpy row).
     """

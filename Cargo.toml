@@ -14,7 +14,7 @@ license = "MIT"
 [workspace.dependencies]
 dif-core = { path = "crates/dif-core" }
 
-# Optimized build that keeps debug info — same profile dif-py uses, so a
+# Optimized build that keeps debug info --- same profile dif-py uses, so a
 # standalone `cargo build -p dif-core --profile dev-release` matches what the
 # Python module compiles dif-core under.
 [profile.dev-release]

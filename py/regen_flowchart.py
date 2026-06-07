@@ -1,8 +1,8 @@
 """Regenerate web/demo/flowchart.dif for the current `.dif` container format.
 
 The wasm viewer loads `flowchart.dif`. This script decodes the demo down to
-pixels — from either a legacy v2 body (brotli + the v2 layout) or the current v3
-container (via the decoder's `render`) — recolors the largest blue block red, and
+pixels --- from either a legacy v2 body (brotli + the v2 layout) or the current v3
+container (via the decoder's `render`) --- recolors the largest blue block red, and
 re-emits a v3 `.dif` with the shipped triplet (outer `store`, palette `zstd-16`,
 frame `zstd-10`) and a derived dark theme.
 
@@ -105,7 +105,7 @@ def _is_blue(r: int, g: int, b: int, a: int) -> bool:
 
 def _recolor_largest_blue_block(w: int, h: int, rgba: bytearray) -> bool:
     """Repaint the largest 4-connected blue region to `_RED` in place. Returns
-    False (no change) when the red is already present — keeps the regen idempotent."""
+    False (no change) when the red is already present --- keeps the regen idempotent."""
     px = w * h
     if any(tuple(rgba[4 * i : 4 * i + 4]) == _RED for i in range(px)):
         return False

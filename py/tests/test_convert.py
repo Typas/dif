@@ -178,7 +178,7 @@ def test_forced_16bit_keeps_all_colors():
 
 def test_quantized_dif_round_trips_to_valid_indices():
     # A quantized image still decodes to a full RGBA8 raster of the right shape
-    # (lossy, so not byte-equal — just structurally sound).
+    # (lossy, so not byte-equal --- just structurally sound).
     arr = _distinct(40)
     img = dif_image_from_array(arr, "keep", "8")
     w, h, rgba = dif.Image.from_dif(img.to_dif("zstd-3")).render("light", _LIGHT, 0)

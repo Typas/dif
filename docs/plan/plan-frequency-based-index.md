@@ -32,7 +32,7 @@ gradients) this inflates the pre-zstd body.
 Smaller output on many-color images. Assign the lowest indices to the most
 frequent colors so the hottest pixels emit 1-byte varints. Benefit is real when
 the palette exceeds 128 colors; at <=128 colors every index already fits in one
-byte (only a marginal entropy effect remains). Decode is unaffected — palette
+byte (only a marginal entropy effect remains). Decode is unaffected --- palette
 order carries no semantics.
 
 ## Design
@@ -41,7 +41,7 @@ order carries no semantics.
 
 Rewrite `indexed_from_rgba8` from one pass to two:
 
-1. **Pass 1 — count.** `HashMap<u32, u32>` keyed by the packed color
+1. **Pass 1 --- count.** `HashMap<u32, u32>` keyed by the packed color
    (`u32::from_le_bytes([r, g, b, a])`), value = occurrence count. Scan every
    rgba chunk and tally.
 2. **Build palette.** Collect the map entries, sort by **count descending**,
@@ -50,8 +50,8 @@ Rewrite `indexed_from_rgba8` from one pass to two:
    `Vec<Rgba>` palette. Then **reuse the same HashMap**: overwrite
    `map[color] = final_index`, where `final_index` is the color's rank in sorted
    order. One HashMap for the whole function; no separate remap vector.
-3. **Pass 2 — encode.** Scan the rgba buffer again; for each pixel
-   `frame.push(map[color])`. Indices are final on emit — **no remap step**.
+3. **Pass 2 --- encode.** Scan the rgba buffer again; for each pixel
+   `frame.push(map[color])`. Indices are final on emit --- **no remap step**.
 
 The packed-`u32` key works for 8-bit rgba (the only input shape of this
 function). Memory footprint: one HashMap plus the palette and frame vectors,
@@ -66,7 +66,7 @@ stay stable.
 ### Default-on, no flag
 
 Output bytes change (palette order and index values) but decode is bit-identical
-to the source pixels, so there is no compatibility concern — re-encoding an old
+to the source pixels, so there is no compatibility concern --- re-encoding an old
 file just produces a smaller equivalent. No opt-in flag. Cost: a second scan and
 a per-pixel hashmap lookup on encode; accepted in exchange for smaller bodies on
 many-color images.
@@ -75,13 +75,13 @@ many-color images.
 
 In scope:
 
-- `indexed_from_rgba8` (`crates/dif-core/src/lib.rs`) — the only production
+- `indexed_from_rgba8` (`crates/dif-core/src/lib.rs`) --- the only production
   indexed builder; the converter (`dif_tools/convert.py:109`) routes all
   still-image indexed encodes through it.
 
 Out of scope / untouched:
 
-- `Image.indexed()` (Rust binding) — test-only, caller supplies pre-built index
+- `Image.indexed()` (Rust binding) --- test-only, caller supplies pre-built index
   frames and controls order; no raw colors to count, reordering there would be a
   true remap. Left unchanged.
 - Grayscale path, decoder, on-disk format, `validate()`.
@@ -92,7 +92,7 @@ The ordering principle is **count over all frames the palette serves**, then
 encode. Today the only raw-pixel builder is single-frame, so n = 1 and the
 principle collapses to "count this one frame." When a raw multi-frame builder is
 added later, pass 1 counts across every frame and pass 2 encodes every frame
-against the single shared palette — same two-pass shape.
+against the single shared palette --- same two-pass shape.
 
 ## Tests
 

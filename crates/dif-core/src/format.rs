@@ -1,6 +1,6 @@
 //! DIF v3 byte layout: the fixed 64-byte container header and the pure
 //! (de)serialization of the *decompressed* body sections (themes, palettes, and
-//! per-frame index planes). This module is codec-agnostic — [`crate::codec`]
+//! per-frame index planes). This module is codec-agnostic --- [`crate::codec`]
 //! drives the two-stage compression and assembles the intermediate body.
 //!
 //! Header (64 bytes, little-endian):

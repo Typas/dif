@@ -48,6 +48,9 @@ test-encode:
 test-native:
     cargo test -p dif-core --features native
 
+# dif-core all feature coverage
+cov-all: cov cov-native cov-std cov-encode
+
 # dif-core line coverage 
 cov: 
     cargo llvm-cov -p dif-core
@@ -64,6 +67,10 @@ cov-native:
 # Same as `cov`, but names the exact uncovered lines per file (for chasing gaps).
 cov-native-missing:
     cargo llvm-cov -p dif-core --features native --show-missing-lines
+
+# dif-core line coverage with std coverage
+cov-encode:
+    cargo llvm-cov -p dif-core --features encode
 
 # Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
 # extension suites.
@@ -103,7 +110,7 @@ py:
 # One-time wasm toolchain (wasm32-wasip1 target, cargo-zigbuild, pinned
 # wasm-bindgen-cli). For the -Oz pass (dropped with wasm-pack) install binaryen
 # from the distro: `dnf install binaryen` (Fedora) or `apt install binaryen`
-# (Debian/Ubuntu) — the `cargo install wasm-opt` crate vendors LLVM and fails to
+# (Debian/Ubuntu) --- the `cargo install wasm-opt` crate vendors LLVM and fails to
 # link. The `wasm` recipe skips -Oz if wasm-opt is absent.
 wasm-setup:
     rustup target add wasm32-wasip1
@@ -111,8 +118,8 @@ wasm-setup:
     cargo install wasm-bindgen-cli --version 0.2.122 --locked
 
 # The C codecs (zstd id 4, lzav id 6) cross-compile through `zig cc`
-# (cargo-zigbuild) against wasi-libc, so the browser decodes all 8 variants —
-# including the default zstd-3 — not just the pure-Rust store/deflate/brotli/lz4
+# (cargo-zigbuild) against wasi-libc, so the browser decodes all 8 variants ---
+# including the default zstd-3 --- not just the pure-Rust store/deflate/brotli/lz4
 # set. wasm-bindgen then emits the JS glue. The wasip1 module needs a small wasi
 # shim in the loader (see web/demo/main.js). Run `just wasm-setup` once first.
 # Build the wasm decoder into dist/pkg (all 8 codecs, cross-compiled via zig cc).
@@ -182,7 +189,7 @@ regen-examples:
 # --- VSCodium / VS Code extension -----------------------------------------
 # The extension reuses the wasip1 decoder built by `just wasm` (all 8 codecs)
 # plus its wasi shim, so the custom editor decodes the same files the browser
-# demo does — including the default zstd-3 `.dif`. `build:wasm` (wasm-pack) is
+# demo does --- including the default zstd-3 `.dif`. `build:wasm` (wasm-pack) is
 # gone: dif-wasm pulls the C codecs, which only build through the zig/wasip1 path.
 
 # Build the extension: stage the wasm decoder + shim into media/, then compile TS.
@@ -274,6 +281,9 @@ py-fmt:
     uv run black .
     uv run ruff check --fix .
 
+py-ci: py-fmt py-lint py-test py-cov
+    @echo "Python CI Done"
+
 # --- Spec -----------------------------------------------------------------
 
 # Compile the spec; repo convention requires it to build.
@@ -283,13 +293,12 @@ spec:
 # --- Aggregate ------------------------------------------------------------
 
 # Rust feature matrix + spec compile (what the repo actually enforces for Rust).
-# fmt-check/clippy are opt-in: the repo doesn't keep dif-core rustfmt-clean.
-ci: test-all spec
-    @echo "core + spec OK"
+ci: fmt fmt-check test-all cov-all spec
+    @echo "CI Done"
 
 # --- Cleanup --------------------------------------------------------------
 
-# `dif` is uninstalled from the uv project env (`.venv`) only — `uv pip` never
+# `dif` is uninstalled from the uv project env (`.venv`) only --- `uv pip` never
 # touches system pip. Leaves tracked sources (web/extension/media/viewer.js) and
 # deps (node_modules).
 # Remove build artifacts: cargo target, staged wasm + TS output, dist, py caches,
@@ -301,3 +310,4 @@ clean:
     rm -rf py/dif_tools/__pycache__ py/bench/__pycache__ py/tests/__pycache__
     rm -rf py/bench/_native
     rm -f web/extension/media/wasi_shim.js *.vsix
+

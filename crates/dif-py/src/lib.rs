@@ -53,7 +53,7 @@ fn codec(s: &str) -> PyResult<Codec> {
 
 /// Validate a codec variant string against `Codec::parse` (the single source of
 /// truth) without encoding; raises `ValueError` on an unknown variant or level.
-/// Lets a caller reject a bad `--dif-codecs` spec up front, before the run.
+/// Lets a caller reject a bad `--outer-codecs` spec up front, before the run.
 #[pyfunction]
 fn validate_codec(name: &str) -> PyResult<()> {
     codec(name).map(|_| ())

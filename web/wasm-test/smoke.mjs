@@ -31,5 +31,5 @@ check(
 );
 
 console.log(
-  `wasm-test OK: ${img.width}×${img.height}, frames=${img.frameCount}, themes=[${themes.join(", ")}]`,
+  `wasm-test OK: ${img.width}*${img.height}, frames=${img.frameCount}, themes=[${themes.join(", ")}]`,
 );

@@ -16,7 +16,7 @@ just ext-install codium     # ...or another editor binary: codium, cursor, ...
 ```
 
 `ext-install` runs `<variant> --install-extension dif-viewer.vsix`. To install
-through the GUI instead — works in any VS Code-family editor (VS Code, VSCodium,
-Cursor, …):
+through the GUI instead --- works in any VS Code-family editor (VS Code, VSCodium,
+Cursor, ...):
 
-> **Extensions** view ▸ **⋯** menu ▸ **Install from VSIX…** ▸ pick `dif-viewer.vsix`
+> **Extensions** view |> **...** menu |> **Install from VSIX...** |> pick `dif-viewer.vsix`

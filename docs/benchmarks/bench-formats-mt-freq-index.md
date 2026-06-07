@@ -74,7 +74,7 @@
 
 ## Note: `dif-brotli-5-mt` removed (was buggy and pointless)
 
-The `dif-brotli-5-mt` rows above are short — `n = 36` under `usc-sipi-misc/`
+The `dif-brotli-5-mt` rows above are short --- `n = 36` under `usc-sipi-misc/`
 (vs 39) and `n = 100` in the aggregate (vs 103). Three tiff inputs
 (`4.1.02`, `4.1.04`, `4.1.07`) panicked mid-run and were dropped:
 
@@ -83,18 +83,18 @@ panicked at brotli-8.0.3/src/enc/brotli_bit_stream.rs:1940:5:
 index out of bounds: the len is 24 but the index is 65535
 ```
 
-Cause: brotli ships two encoders — a fast q0–9 path and the full q10–11 path —
+Cause: brotli ships two encoders --- a fast q0--9 path and the full q10--11 path ---
 and `compress_multi` (the worker path) only drives the full one, so handing it
 quality 5 reads out of bounds. It is data- and schedule-dependent: `4.1.04` panics
 deterministically, `4.1.02`/`4.1.07` only under some thread interleavings. The
 frequency-ordered palette index changed the `.difr` byte layout, which shifted
-*which* inputs trip it — the wobble is in the preprocess, not in brotli.
+*which* inputs trip it --- the wobble is in the preprocess, not in brotli.
 
 Multithreading buys nothing at q5 anyway (encode is already cheap; workers only add
 overhead), so:
 
 - `brotli_compress` now gates the MT path to `level >= 10`
-  (`crates/dif-core/src/codec.rs`); q0–9 falls back to the single-thread writer,
+  (`crates/dif-core/src/codec.rs`); q0--9 falls back to the single-thread writer,
   byte-for-byte identical. Verified: `brotli-5` workers=12 == workers=0 output, and
   0 panics across all 103 images.
 - `brotli-5` dropped from `DIF_MT_CODECS` (`bench/codecs.py`); a `brotli-5-mt` row

@@ -1,15 +1,15 @@
 """Registry of lossless compression codecs for the `.difr` benchmark.
 
 This benchmark measures *standalone* compression algorithms over the raw `.difr`
-body — it deliberately does **not** include the DIF container itself. Each
+body --- it deliberately does **not** include the DIF container itself. Each
 :class:`Codec` self-detects availability at import time, so the harness runs with
 whatever is installed and reports the rest as unavailable. ``decompress`` receives
 the original length because some libraries (libdeflate) require the output size up
 front.
 
 Codecs are thread-aware: a codec may carry an optional multithreaded encoder.
-:func:`all_codecs` picks the multithreaded encoder when ``numthreads > 1`` (and the
-codec has one), else the single-thread encoder — never both for one codec.
+:func:`all_codecs` picks the multithreaded encoder when ``num_threads > 1`` (and the
+codec has one), else the single-thread encoder --- never both for one codec.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class Codec:
     decompress: Callable[[bytes, int], bytes]
     available: bool = True
     note: str = ""
-    # Optional multithreaded encoder `(data, numthreads) -> bytes`; the stream
+    # Optional multithreaded encoder `(data, num_threads) -> bytes`; the stream
     # decodes identically with `decompress`. None = single-thread only.
     mt_compress: Callable[[bytes, int], bytes] | None = None
 
@@ -139,14 +139,14 @@ for _c in _native.codecs():
     _add(_c)
 
 
-def _select(codec: Codec, numthreads: int) -> Codec:
-    """Single-thread codec at ``numthreads <= 1``; the multithreaded variant (same
-    name) when ``numthreads > 1`` and the codec has one. Never both."""
-    if numthreads > 1 and codec.mt_compress is not None:
+def _select(codec: Codec, num_threads: int) -> Codec:
+    """Single-thread codec at ``num_threads <= 1``; the multithreaded variant (same
+    name) when ``num_threads > 1`` and the codec has one. Never both."""
+    if num_threads > 1 and codec.mt_compress is not None:
         mt = codec.mt_compress
         return Codec(
             codec.name,
-            lambda d: mt(d, numthreads),
+            lambda d: mt(d, num_threads),
             codec.decompress,
             codec.available,
             codec.note,
@@ -154,12 +154,12 @@ def _select(codec: Codec, numthreads: int) -> Codec:
     return codec
 
 
-def all_codecs(numthreads: int = 1) -> list[Codec]:
-    return [_select(c, numthreads) for c in _REGISTRY]
+def all_codecs(num_threads: int = 1) -> list[Codec]:
+    return [_select(c, num_threads) for c in _REGISTRY]
 
 
-def available_codecs(numthreads: int = 1) -> list[Codec]:
-    return [c for c in all_codecs(numthreads) if c.available]
+def available_codecs(num_threads: int = 1) -> list[Codec]:
+    return [c for c in all_codecs(num_threads) if c.available]
 
 
 # Aliases so `--codecs` accepts the DIF family names (`bsc`, `deflate`) as well as
@@ -192,7 +192,7 @@ def _dynamic_libbsc(token: str) -> Codec | None:
     return _native.make_libbsc(token.split("-", 1)[1])
 
 
-def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
+def select_codecs(specs: list[str] | None, num_threads: int = 1) -> list[Codec]:
     """Filter the registry by lzbench ``-e`` tokens (see ``bench.__main__._codecs``).
 
     A bare family token (``zstd``, ``libbsc``) selects every level of that family;
@@ -203,13 +203,13 @@ def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
     ``ValueError`` naming any token that matches no codec.
     """
     if not specs:
-        return all_codecs(numthreads)
+        return all_codecs(num_threads)
     tokens = [_canon(s) for s in specs]
     exact = {t for t in tokens if "-" in t}
     families = {t for t in tokens if "-" not in t}
     out = [
         c
-        for c in all_codecs(numthreads)
+        for c in all_codecs(num_threads)
         if c.name in exact or _family(c.name) in families
     ]
     matched = {c.name for c in out} | {_family(c.name) for c in out}
@@ -219,7 +219,7 @@ def select_codecs(specs: list[str] | None, numthreads: int = 1) -> list[Codec]:
             continue
         c = _dynamic_libbsc(t)  # on-demand libbsc b/m/e spec?
         if c is not None:
-            out.append(_select(c, numthreads))
+            out.append(_select(c, num_threads))
             matched.add(t)
         else:
             missing.append(orig)

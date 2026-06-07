@@ -18,7 +18,7 @@ fn main() {
         );
     }
 
-    // libsais is C99 — compile it as C in its own static lib.
+    // libsais is C99 --- compile it as C in its own static lib.
     let mut c = cc::Build::new();
     c.file(v.join("bwt/libsais/libsais.c"))
         .warnings(false)

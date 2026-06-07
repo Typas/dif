@@ -4,7 +4,7 @@ Sizes and encode/decode speeds via ``imagecodecs`` (and Pillow for GIF). Each
 format is guarded: a missing codec is annotated rather than crashing the run.
 Every format here is lossless by construction, so no loss column is reported; a
 round-trip check still runs (``FormatResult.lossless``, asserted in tests) to
-catch a codec that silently stops round-tripping. GIF is genuine lossless LZW —
+catch a codec that silently stops round-tripping. GIF is genuine lossless LZW ---
 it only diverges when an image exceeds its 256-entry palette (width, not loss).
 """
 
@@ -27,12 +27,12 @@ from dif_tools import dif_image_from_array, load_image, resolve_raster
 
 from .metric import compute_m, speed
 
-# `DIF_TRIPLET` is the shipped encode config — (outer, palette, frame): outer
+# `DIF_TRIPLET` is the shipped encode config --- (outer, palette, frame): outer
 # `store` keeps frames seekable for random-access / low-memory decode, palette
 # `zstd-16`, frame `zstd-10`. It is the default `bench formats` DIF row; sweep any
 # section at runtime with the lzbench-style `--dif-*codecs` flags (no static study
-# set — the flags build any sweep or matrix). `REL_REF` is the `rel` reference
-# column — every format's size is relative to it (PNG, the universal lossless
+# set --- the flags build any sweep or matrix). `REL_REF` is the `rel` reference
+# column --- every format's size is relative to it (PNG, the universal lossless
 # baseline).
 DIF_TRIPLET: tuple[str, str, str] = ("store", "zstd-16", "zstd-10")
 REL_REF = "png"  # `rel` column reference format
@@ -72,7 +72,7 @@ def _abbr(variant: str) -> str:
     fam, _, lvl = variant.partition("-")
     base = _FAMILY_ABBR.get(fam)
     if base is None:
-        return variant  # unknown — show verbatim (e.g. a typo'd codec)
+        return variant  # unknown --- show verbatim (e.g. a typo'd codec)
     return base + (lvl or _DEFAULT_LEVEL[fam])
 
 
@@ -135,11 +135,11 @@ def _measure(
 def compare_image(
     path: str | Path,
     repeats: int = 3,
-    dif_codecs: tuple[str, ...] | list[str] = (DIF_TRIPLET[0],),
+    outer_codecs: tuple[str, ...] | list[str] = (DIF_TRIPLET[0],),
     palette_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[1],),
     frame_codecs: tuple[str, ...] | list[str] | None = (DIF_TRIPLET[2],),
     stream: bool = False,
-    numthreads: int = 1,
+    num_threads: int = 1,
     index_widths: tuple[str, ...] | list[str] = ("auto",),
     dif_only: bool = False,
 ) -> list[FormatResult]:
@@ -159,7 +159,7 @@ def compare_image(
         r = _measure(name, enc, dec, expected, nbytes, repeats, note)
         # PNG sets the running `rel` reference; the final table re-derives it via
         # _ref_size. dif rows stream before png, so their live rel stays blank
-        # until png lands — the re-derived final/TSV/report tables are correct.
+        # until png lands --- the re-derived final/TSV/report tables are correct.
         if ref_size is None and r.available and name == REL_REF:
             ref_size = r.size
         rows.append(r)
@@ -170,8 +170,8 @@ def compare_image(
     # dark-theme synthesis run inside the closure (parity with png_encode(arr),
     # which encodes the raw array). `arr` is already in memory, so no file I/O
     # is timed. `decode` renders one theme back to pixels (file -> bitmap).
-    # The whole `.dif` is encoded all-mt or all-st: workers come from --numthreads.
-    workers = numthreads if numthreads > 1 else 0
+    # The whole `.dif` is encoded all-mt or all-st: workers come from --num-threads.
+    workers = num_threads if num_threads > 1 else 0
 
     def dif_enc(strategy: str, outer: str, palette: str, frame: str, iw: str):
         return lambda: dif_image_from_array(arr, strategy, iw).to_dif(
@@ -186,7 +186,7 @@ def compare_image(
 
     def dif_meta(iw: str) -> tuple[int, str]:
         """Resolve `(index_bits, note)` for width request `iw` from one untimed
-        build — the timed encoder rebuilds, so this only reads metadata. The note
+        build --- the timed encoder rebuilds, so this only reads metadata. The note
         reports the pre-quantization color count when the palette was reduced."""
         img = dif_image_from_array(arr, "keep", iw)
         note = f"quant {img.source_colors}" if img.quantized() else ""
@@ -217,7 +217,7 @@ def compare_image(
             if stream:
                 print(_dif_row_line(store_r))
 
-            for outer in dif_codecs:
+            for outer in outer_codecs:
                 for pal in pcs:
                     for frm in fcs:
                         p = outer if pal is None else pal
@@ -252,7 +252,7 @@ def compare_image(
     # row below has a live ratio and the table is topped by the baseline. png's
     # name and encoder are one unit; REL_REF only selects which row rel divides by.
     # FIXME: "emit ref first" assumes REL_REF == "png". If REL_REF moves to another
-    # row, this hardcoded-first emit no longer matches it — rows above the real ref
+    # row, this hardcoded-first emit no longer matches it --- rows above the real ref
     # get a stale live ratio. Drive the first-emit off REL_REF, or assert they agree.
     if stream:
         print(_HEAD)
@@ -260,12 +260,12 @@ def compare_image(
     emit("png", lambda: imagecodecs.png_encode(arr), imagecodecs.png_decode, arr)
 
     # All DIF rows for one index-width request share its resolved width + quant
-    # note (the palette — hence the width — is the same across codecs/themes).
+    # note (the palette --- hence the width --- is the same across codecs/themes).
     for iw in index_widths:
         bits, note = dif_meta(iw)
 
         # Headline row: the shipped triplet (store / zstd-16 / zstd-10) carrying
-        # *both* themes (light + dark) — the real `.dif` product, not directly
+        # *both* themes (light + dark) --- the real `.dif` product, not directly
         # size-comparable to the single-theme formats below. `-2p` = 2-palette.
         outer, palette, frame = DIF_TRIPLET
         emit(
@@ -277,10 +277,10 @@ def compare_image(
         )
 
         # Codec comparison: one theme each (apples-to-apples with the single-image
-        # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --numthreads.
+        # formats png/gif/webp/jxl/avif), encoded all-mt or all-st per --num-threads.
         # palette/frame default to inheriting the outer codec; given lists run the
         # cartesian product. DIF losslessness is covered in tests.
-        for outer in dif_codecs:
+        for outer in outer_codecs:
             for pal in pcs:
                 for frm in fcs:
                     p = outer if pal is None else pal
@@ -297,32 +297,32 @@ def compare_image(
     # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs
     # leaves avif speed unset -> aom runs at speed 0, ~0.3 MB/s; we pin the
     # documented default instead.) webp keeps its own default. (png is emitted
-    # above as the rel reference.) numthreads defaults to 1 so enc MB/s is an
+    # above as the rel reference.) num-threads defaults to 1 so enc MB/s is an
     # apples-to-apples 1-core measure (dif/png/gif are single-threaded) and a
-    # future imagecodecs `None`->auto default can't skew it; --numthreads N lifts
+    # future imagecodecs `None`->auto default can't skew it; --num-threads N lifts
     # the cap to probe jxl/avif scaling (webp lossless ignores it).
     # The `3ch` note flags codecs fed `rgb` (alpha dropped) while enc/dec MB/s is
     # still normalized over `nbytes` = the 4-channel `arr`. They process 3/4 the
     # bytes but are credited the full RGBA payload, so their throughput reads ~4/3
     # high vs a strict bytes-processed measure. (png/dif/jxl encode `arr`, no skew.)
-    nt = numthreads
+    nt = num_threads
     emit(
         "webp-ll",
-        lambda: imagecodecs.webp_encode(rgb, lossless=True, numthreads=nt),
+        lambda: imagecodecs.webp_encode(rgb, lossless=True, num_threads=nt),
         imagecodecs.webp_decode,
         rgb,
         note="3ch",
     )
     emit(
         "jxl-ll",
-        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7, numthreads=nt),
+        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7, num_threads=nt),
         imagecodecs.jpegxl_decode,
         arr,
     )
     emit(
         "avif-ll",
         lambda: imagecodecs.avif_encode(
-            rgb, level=100, pixelformat="yuv444", speed=6, numthreads=nt
+            rgb, level=100, pixelformat="yuv444", speed=6, num_threads=nt
         ),
         imagecodecs.avif_decode,
         rgb,
@@ -330,7 +330,7 @@ def compare_image(
     )
 
     # GIF via Pillow (lossless LZW; round-trips exactly only for <=256 colors,
-    # else the palette quantize drops colors — a width limit, not codec loss).
+    # else the palette quantize drops colors --- a width limit, not codec loss).
     pil = PILImage.fromarray(rgb)
 
     def gif_enc() -> bytes:
@@ -454,7 +454,7 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
 # One row per image is detail (console + TSV); the report aggregates every
 # format over all images beneath each directory, recursively.
 
-# (path, rows) for one image — the unit aggregation buckets over.
+# (path, rows) for one image --- the unit aggregation buckets over.
 ImageRows = tuple[str, list[FormatResult]]
 
 

@@ -4,7 +4,7 @@
 //!
 //! When an image has more unique colors than the chosen [`crate::IndexWidth`] can
 //! index, the builder calls [`quantize_oklab`] to merge colors down to fit instead
-//! of failing — the lossy fallback that lets a photographic source still encode as
+//! of failing --- the lossy fallback that lets a photographic source still encode as
 //! an indexed `.dif` (parity with GIF's 256-color palette quantize). Colors are
 //! clustered by **median-cut in OKLab space** so merges follow perceived color
 //! distance rather than raw sRGB. Alpha is carried as a 4th box axis so translucent
@@ -12,7 +12,7 @@
 //!
 //! Determinism: every tie (which box to split, where to split, box ordering) is
 //! broken by the packed color key, so the output palette + remap are byte-for-byte
-//! reproducible — same contract as the rest of the encoder.
+//! reproducible --- same contract as the rest of the encoder.
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -23,7 +23,7 @@ use rustc_hash::FxHashMap;
 
 /// Weight applied to the (0..1) alpha axis relative to the OKLab color axes in the
 /// median-cut distance. `L` spans ~0..1 and `a`/`b` ~ -0.4..0.4, so a weight of
-/// 2.0 makes a full opaque/transparent gap the dominant axis — transparent and
+/// 2.0 makes a full opaque/transparent gap the dominant axis --- transparent and
 /// opaque colors never share a cluster.
 const ALPHA_WEIGHT: f64 = 2.0;
 
