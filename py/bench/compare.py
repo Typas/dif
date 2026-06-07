@@ -308,21 +308,21 @@ def compare_image(
     nt = num_threads
     emit(
         "webp-ll",
-        lambda: imagecodecs.webp_encode(rgb, lossless=True, num_threads=nt),
+        lambda: imagecodecs.webp_encode(rgb, lossless=True, numthreads=nt),
         imagecodecs.webp_decode,
         rgb,
         note="3ch",
     )
     emit(
         "jxl-ll",
-        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7, num_threads=nt),
+        lambda: imagecodecs.jpegxl_encode(arr, lossless=True, effort=7, numthreads=nt),
         imagecodecs.jpegxl_decode,
         arr,
     )
     emit(
         "avif-ll",
         lambda: imagecodecs.avif_encode(
-            rgb, level=100, pixelformat="yuv444", speed=6, num_threads=nt
+            rgb, level=100, pixelformat="yuv444", speed=6, numthreads=nt
         ),
         imagecodecs.avif_decode,
         rgb,

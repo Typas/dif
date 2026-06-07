@@ -279,9 +279,14 @@ py-test:
     uv run pytest
 
 # Python line+branch coverage over dif_tools + bench (coverage.py via pytest-cov;
-# source configured in pyproject). Run `just py` first.
+# source configured in pyproject). Run `just py` first. Enforces a per-file floor
+# (>= 80% each, not just the total), since coverage.py only gates the aggregate.
+# The JSON is streamed from the existing .coverage data file -- nothing persisted.
 py-cov:
     uv run pytest --cov --cov-report=term-missing
+    @uv run coverage json -o - --quiet | jq -e '[.files[] | select(.summary.percent_covered < 80)] | length == 0' >/dev/null \
+        || { uv run coverage json -o - --quiet | jq -r '.files | to_entries[] | select(.value.summary.percent_covered < 80) | "  \(.key): \(.value.summary.percent_covered | floor)% < 80%"'; \
+             echo "py-cov: per-file line coverage below 80%"; exit 1; }
 
 # Repo requires these clean.
 py-lint:

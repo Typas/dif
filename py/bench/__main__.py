@@ -288,9 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 rp.write(f"{title}\n\n{table}\n\n")
     elif args.cmd == "formats":
-        _check_codecs(
-            ap, args.outer_codecs, args.palette_codecs, args.frame_codecs
-        )
+        _check_codecs(ap, args.outer_codecs, args.palette_codecs, args.frame_codecs)
         print(f"# {len(imgs)} images; per-(image,format) detail -> {args.out}\n")
         reports: list[cmp.ImageRows] = []
         # Per-image detail streams to the console and the TSV; the report gets

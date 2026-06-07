@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+
 import numpy as np
+import pytest
 from PIL import Image as PILImage
 
-from bench.__main__ import _images
+from bench import native
+from bench.__main__ import _codecs, _images, _index_widths
 from bench.__main__ import main as bench_main
 from dif_tools.__main__ import main as dif_main
 
@@ -115,6 +119,57 @@ def test_bench_formats_dif_only_cli(tmp_path):
     assert lines[0].startswith("image\t")
     formats = [line.split("\t")[1] for line in lines[1:] if line]
     assert "png" not in formats
+
+
+def test_codecs_spec_parses_levels_and_skips_empty():
+    # `,` enumerates levels; a trailing `/` yields an empty segment that is skipped.
+    assert _codecs("a/b,1,2/") == ["a", "b-1", "b-2"]
+
+
+def test_index_widths_validate():
+    assert _index_widths("auto/8/16") == ["auto", "8", "16"]
+    with pytest.raises(argparse.ArgumentTypeError, match="invalid index width"):
+        _index_widths("auto/7")
+
+
+def test_setup_reports_all_built(monkeypatch, capsys):
+    monkeypatch.setattr(native, "build_lzav", lambda: True)
+    monkeypatch.setattr(native, "build_kanzi", lambda: True)
+    monkeypatch.setattr(native, "build_libbsc", lambda cuda=False: True)
+    assert bench_main(["setup"]) == 0
+    out = capsys.readouterr().out
+    assert "lzav shim: built" in out and "libbsc shim: built" in out
+
+
+def test_setup_cuda_reports_failures(monkeypatch, capsys):
+    monkeypatch.setattr(native, "build_lzav", lambda: False)
+    monkeypatch.setattr(native, "build_kanzi", lambda: False)
+    monkeypatch.setattr(native, "build_libbsc", lambda cuda=False: False)
+    assert bench_main(["setup", "--cuda"]) == 0
+    out = capsys.readouterr().out
+    assert "FAILED" in out and "nvcc" in out
+
+
+def test_codecs_unknown_codec_errors(tmp_path):
+    src = _toy_png(tmp_path / "d.png")
+    with pytest.raises(SystemExit):
+        bench_main(["codecs", str(src), "--codecs", "definitely-not-a-codec"])
+
+
+def test_codecs_unavailable_libbsc_refused(tmp_path, monkeypatch, capsys):
+    src = _toy_png(tmp_path / "d.png")
+    monkeypatch.setattr(
+        native, "unavailable_libbsc", lambda sel: [("libbsc-b25m7e0", "needs CUDA")]
+    )
+    rc = bench_main(["codecs", str(src), "--repeats", "1"])
+    assert rc == 1
+    assert "not available" in capsys.readouterr().out
+
+
+def test_formats_unknown_codec_errors(tmp_path):
+    src = _toy_png(tmp_path / "d.png")
+    with pytest.raises(SystemExit):
+        bench_main(["formats", str(src), "--outer-codecs", "bogus"])
 
 
 def test_bench_lfs_pointer_detected(tmp_path, capsys):
