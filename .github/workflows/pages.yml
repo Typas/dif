@@ -26,6 +26,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true # the data/dif-examples/*.dif gallery assets live in git-LFS
+      # The wasm decoder builds lzav-shim (dif-core c-codecs), whose source is a
+      # vendored submodule. Mirror README's documented init so the build has it.
+      - name: Sync and init submodules
+        run: git submodule sync && git submodule update --init
       - uses: actions/configure-pages@v6
       # Third-party actions are pinned to a commit SHA (supply-chain safety);
       # the trailing comment tracks the human-readable version.
