@@ -166,18 +166,27 @@ wasm-test:
 regen-demo:
     uv run python py/regen_flowchart.py
 
-# Build the wasm decoder, stage a self-contained demo into dist/demo/ (page +
-# the dist/pkg decoder + the sample .dif, with main.js' import rewritten to the
-# local ./pkg), then serve it over HTTP. Open http://localhost:8000/ and toggle
-# your OS light/dark theme. Override the port with `just demo-server 9000`. Run
-# `just wasm-setup` once first; Ctrl-C stops the server.
-demo-server port="8000": wasm
+# Build the wasm decoder and stage a self-contained site into dist/demo/: the two
+# pages (single demo + examples gallery), the dist/pkg decoder, the sample .dif,
+# every data/dif-examples/ file, and a generated examples/index.json manifest.
+# The viewer's decoder import is rewritten from ../../dist/pkg to the local ./pkg.
+# All asset paths are relative, so dist/demo/ works from any base path (e.g.
+# GitHub Pages under /dif/). The CI Pages workflow uploads this dir verbatim.
+# Run `just wasm-setup` once first.
+demo-build: wasm
     rm -rf dist/demo
     mkdir -p dist/demo
-    cp web/demo/index.html web/demo/main.js web/demo/wasi_shim.js web/demo/flowchart.dif dist/demo/
+    cp web/demo/index.html web/demo/examples.html web/demo/main.js web/demo/gallery.js web/demo/viewer.js web/demo/wasi_shim.js web/demo/flowchart.dif dist/demo/
     cp -r dist/pkg dist/demo/pkg
-    sed -i 's#\.\./\.\./dist/pkg/#./pkg/#' dist/demo/main.js
-    @echo "DIF demo: http://localhost:{{port}}/"
+    cp -r data/dif-examples dist/demo/examples
+    uv run python -c "import json,pathlib as P; r=P.Path('dist/demo/examples'); m={d.name: sorted(p.name for p in d.glob('*.dif')) for d in sorted(r.iterdir()) if d.is_dir()}; (r/'index.json').write_text(json.dumps(m, indent=2)+'\n')"
+    sed -i 's#\.\./\.\./dist/pkg/#./pkg/#' dist/demo/*.js
+
+# Stage the demo (demo-build), then serve it over HTTP. Open http://localhost:8000/
+# for the single demo or /examples.html for the gallery, and toggle your light/dark
+# theme. Override the port with `just demo-server 9000`. Ctrl-C stops the server.
+demo-server port="8000": demo-build
+    @echo "DIF demo: http://localhost:{{port}}/ (gallery: /examples.html)"
     cd dist/demo && uv run python -m http.server {{port}}
 
 # Convert one image (PNG/TIFF/JPEG/...) or a .drawio diagram to .dif using the

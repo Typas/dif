@@ -1,0 +1,51 @@
+name: Deploy demo to GitHub Pages
+
+# Builds the wasm decoder, stages the self-contained demo site (single demo +
+# examples gallery) into dist/demo via `just demo-build`, and publishes it to
+# GitHub Pages. Enable once in repo Settings > Pages > Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight Pages deploy at a time; newer pushes supersede older runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true # the data/dif-examples/*.dif gallery assets live in git-LFS
+      - uses: actions/configure-pages@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: extractions/setup-just@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install binaryen (wasm-opt for the -Oz pass)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+      - name: Build wasm decoder and stage the demo
+        run: |
+          just wasm-setup
+          just demo-build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/demo
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
