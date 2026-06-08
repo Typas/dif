@@ -28,27 +28,33 @@
 A bare `just` (or `just --list`) prints every recipe.
 
 ### Rust core (`dif-core`)
-| Recipe              | Does                                                                                 |
-|---------------------|--------------------------------------------------------------------------------------|
-| `build`             | Build the no_std+alloc default (store/deflate/lz4) --- also the portability check.   |
-| `build-std`         | Build with `std` (adds brotli).                                                      |
-| `build-native`      | Build with `native` (brotli + zstd + libdeflate encoder + lzav, + mt + dark-derive). |
-| `check-nostd`       | Assert the portable core still builds no_std (alias of `build`).                     |
-| `test`              | Test the core (store/deflate/lz4 under `cfg(test)`).                                 |
-| `test-native`       | Test with all native codecs.                                                         |
-| `cov`               | dif-core line coverage (cargo-llvm-cov, native features).                            |
-| `test-all`          | Every feature tested: core matrix + `py-test` + `wasm-test` + `ext-test`.            |
-| `fmt` / `fmt-check` | `cargo fmt` (write / check).                                                         |
-| `clippy`            | Clippy with `--all-features -D warnings`.                                            |
+| Recipe                                          | Does                                                                                       |
+|-------------------------------------------------|--------------------------------------------------------------------------------------------|
+| `build`                                         | Build the no_std+alloc default (store/deflate/lz4) --- also the portability check.         |
+| `build-std`                                     | Build with `std` (adds brotli).                                                            |
+| `build-native`                                  | Build with `native` (brotli + zstd + libdeflate encoder + lzav, + mt + dark-derive).       |
+| `check`                                         | `cargo check --all`.                                                                       |
+| `check-nostd`                                   | Assert the portable core still builds no_std (alias of `build`).                           |
+| `test`                                          | Test the core (store/deflate/lz4 under `cfg(test)`).                                       |
+| `test-std`                                      | Test with `std`.                                                                           |
+| `test-encode`                                   | Test with `encode` (OKLab quantize + dark-theme derivation).                               |
+| `test-native`                                   | Test with all native codecs.                                                               |
+| `cov` / `cov-std` / `cov-encode` / `cov-native` | Line coverage per feature set; `cov-all` runs all four. `*-missing` names uncovered lines. |
+| `test-all`                                      | Every feature tested: core matrix + `py-test` + `wasm-test` + `ext-test`.                  |
+| `fmt` / `fmt-check`                             | `cargo fmt` (write / check).                                                               |
+| `clippy`                                        | Clippy with `--all-features -D warnings`.                                                  |
 
 ### Bindings & decoder
-| Recipe       | Does                                                                                                               |
-|--------------|--------------------------------------------------------------------------------------------------------------------|
-| `py`         | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
-| `wasm-setup` | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
-| `wasm`       | Build the browser decoder into `dist/pkg` (all 8 codecs cross-compiled via `zig cc`).                              |
-| `wasm-test`  | Smoke-test the decoder in node: decode `web/demo/flowchart.dif` (run `wasm` first; skips without node).            |
-| `regen-demo` | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
+| Recipe                 | Does                                                                                                               |
+|------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `py`                   | Build the `dif` Python extension (profile `dev-release` = optimized + debug info, so bench timings are realistic). |
+| `wasm-setup`           | One-time wasm toolchain (`wasm32-wasip1` target, `cargo-zigbuild`, pinned `wasm-bindgen-cli`).                     |
+| `wasm`                 | Build the browser decoder into `dist/pkg` (all 8 codecs cross-compiled via `zig cc`).                              |
+| `wasm-test`            | Smoke-test the decoder in node: decode `web/demo/flowchart.dif` (run `wasm` first; skips without node).            |
+| `demo-server [port]`   | Build the decoder, stage a self-contained demo into `dist/demo/`, and serve it at `http://localhost:8000/`.        |
+| `convert IN OUT [...]` | Convert one image or `.drawio` to `.dif` (shipped store/zstd-16/zstd-10 triplet; override any arg).                |
+| `regen-demo`           | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
+| `regen-examples`       | Regenerate every committed `.dif` under `data/dif-examples/` from its `data/testdata/` source (run `py` first).    |
 
 ### VS Code / Codium / Cursor extension
 | Recipe                  | Does                                                                                                                    |
@@ -65,18 +71,27 @@ A bare `just` (or `just --list`) prints every recipe.
 | `drawio-png IN OUT` | Render a `.drawio` to PNG via the local container (no diagrams.net).           |
 
 ### Python tools / tests
-| Recipe    | Does                                                       |
-|-----------|------------------------------------------------------------|
-| `py-test` | Run the pytest suite (run `py` first).                     |
-| `py-cov`  | pytest suite with coverage.py (dif_tools + bench).         |
-| `py-lint` | `black --check`, `ruff check`, `ty check` (must be clean). |
-| `py-fmt`  | `black` + `ruff check --fix`.                              |
+| Recipe    | Does                                                                                 |
+|-----------|--------------------------------------------------------------------------------------|
+| `py-test` | Run the pytest suite (run `py` first).                                               |
+| `py-cov`  | pytest suite with coverage.py (dif_tools + bench); enforces a per-file >= 80% floor. |
+| `py-lint` | `black --check`, `ruff check`, `ty check` (must be clean).                           |
+| `py-fmt`  | `black` + `ruff check --fix`.                                                        |
+| `py-ci`   | `py-fmt` + `py-lint` + `py-test` + `py-cov`.                                         |
+
+### Benchmarks
+| Recipe                 | Does                                                                      |
+|------------------------|---------------------------------------------------------------------------|
+| `bench-setup [--cuda]` | Build the optional native benchmark codecs (lzav + kanzi + libbsc shims). |
+| `bench-codecs [...]`   | Rank every registered codec over a raw `.difr` body by the `M` metric.    |
+| `bench-formats [...]`  | Compare `.dif` against PNG / WebP / JXL / AVIF / GIF. See `README.md`.    |
 
 ### Spec & aggregate
-| Recipe | Does                                            |
-|--------|-------------------------------------------------|
-| `spec` | Compile the Typst spec.                         |
-| `ci`   | `test-all` + `spec` --- what the repo enforces. |
+| Recipe  | Does                                                                                       |
+|---------|--------------------------------------------------------------------------------------------|
+| `spec`  | Compile the Typst spec.                                                                    |
+| `ci`    | `fmt` + `fmt-check` + `test-all` + `cov-all` + `spec` --- what the repo enforces for Rust. |
+| `clean` | Remove build artifacts (cargo target, staged wasm/TS, `dist`, py caches, bench shims).     |
 
 ## Final Information
 Look at [`README.md`](README.md) if you cannot find enough information here.

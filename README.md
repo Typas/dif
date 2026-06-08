@@ -83,7 +83,15 @@ See `bench-formats` part to see the option details.
 
 ### Start a Demo Web Server
 ```sh
+just wasm-setup    # one-time wasm toolchain (skip if already done)
+
+just demo-server [port]   # builds the decoder, stages dist/demo/, serves it
 ```
+
+`demo-server` cross-compiles the wasm decoder, stages a self-contained demo
+(the theme-aware page + decoder + sample `.dif`) into `dist/demo/`, and serves it.
+Open `http://localhost:8000/` (default port `8000`) and toggle your OS light/dark
+theme to watch the same `.dif` re-theme itself. Ctrl-C stops the server.
 
 ## justfile recipes
 
@@ -106,9 +114,11 @@ per-image **TSV** (`--out`) plus a per-directory aggregate **report** (`--report
 just bench-setup
 ```
 Builds the optional native benchmark codecs that have no PyPI wheel: the **lzav**
-shim (fetches `lzav.h`, compiles with `cc`) and the **kanzi** shim (vendors
-kanzi-cpp, `cargo build`). Needs a compiler and network; missing ones are just
-reported as unavailable, the rest of the harness still runs.
+shim (fetches `lzav.h`, compiles with `cc`), the **kanzi** shim (vendors
+kanzi-cpp, `cargo build`), and the **libbsc** shim. Pass `--cuda` to build
+libbsc's GPU sort transforms (needs `nvcc` + OpenMP + an NVIDIA GPU at run time).
+Needs a compiler and network; missing ones are just reported as unavailable, the
+rest of the harness still runs.
 
 ### `bench-codecs` --- rank codecs over the `.difr` body
 ```sh
