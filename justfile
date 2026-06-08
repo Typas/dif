@@ -166,6 +166,20 @@ wasm-test:
 regen-demo:
     uv run python py/regen_flowchart.py
 
+# Build the wasm decoder, stage a self-contained demo into dist/demo/ (page +
+# the dist/pkg decoder + the sample .dif, with main.js' import rewritten to the
+# local ./pkg), then serve it over HTTP. Open http://localhost:8000/ and toggle
+# your OS light/dark theme. Override the port with `just demo-server 9000`. Run
+# `just wasm-setup` once first; Ctrl-C stops the server.
+demo-server port="8000": wasm
+    rm -rf dist/demo
+    mkdir -p dist/demo
+    cp web/demo/index.html web/demo/main.js web/demo/wasi_shim.js web/demo/flowchart.dif dist/demo/
+    cp -r dist/pkg dist/demo/pkg
+    sed -i 's#\.\./\.\./dist/pkg/#./pkg/#' dist/demo/main.js
+    @echo "DIF demo: http://localhost:{{port}}/"
+    cd dist/demo && uv run python -m http.server {{port}}
+
 # Convert one image (PNG/TIFF/JPEG/...) or a .drawio diagram to .dif using the
 # shipped triplet: outer=store (seekable random-access), palette=zstd-16,
 # frame=zstd-10, with a 2-theme palette (light source + OKLab-derived dark).

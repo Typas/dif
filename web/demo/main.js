@@ -37,6 +37,18 @@ async function main() {
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   let override = null; // null = follow OS; otherwise "light" | "dark"
 
+  // Page background/foreground per appearance (mirrors the CSS in index.html).
+  // The override button switches the effective mode, so drive the whole page
+  // from it -- otherwise the CSS @media rule keeps the page on the OS theme
+  // while only the canvas re-themes.
+  const PAGE_THEME = { light: ["#ffffff", "#111111"], dark: ["#1e1e1e", "#eeeeee"] };
+
+  function applyPageTheme(mode) {
+    const [bg, fg] = PAGE_THEME[mode] || PAGE_THEME.light;
+    document.body.style.background = bg;
+    document.body.style.color = fg;
+  }
+
   function currentMode() {
     if (override) return override;
     return media.matches ? "dark" : "light";
@@ -68,6 +80,7 @@ async function main() {
       timer = null;
     }
     const mode = currentMode();
+    applyPageTheme(mode);
     const base = hostBase(mode);
     const n = img.frameCount;
     if (n <= 1) {
