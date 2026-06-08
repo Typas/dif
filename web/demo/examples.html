@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DIF --- examples gallery</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 16rem 1fr;
+        background: #ffffff;
+        color: #111111;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1e1e1e; color: #eeeeee; }
+      }
+      #sidebar {
+        border-right: 1px solid currentColor;
+        max-height: 100vh;
+        overflow-y: auto;
+        padding: 0.5rem 0;
+      }
+      #sidebar h2 {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.6;
+        margin: 0.75rem 1rem 0.25rem;
+      }
+      #sidebar button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        background: none;
+        color: inherit;
+        font: inherit;
+        padding: 0.3rem 1rem;
+        cursor: pointer;
+      }
+      #sidebar button:hover { background: rgba(127, 127, 127, 0.18); }
+      #sidebar button.active { background: rgba(127, 127, 127, 0.32); font-weight: 600; }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem;
+        min-width: 0;
+      }
+      nav { align-self: flex-start; }
+      canvas {
+        border: 1px solid currentColor;
+        max-width: 100%;
+        height: auto;
+        image-rendering: pixelated;
+      }
+      code { opacity: 0.7; }
+      /* Always-present theme switch, fixed top-right. */
+      .theme-switch {
+        position: fixed;
+        top: 0.75rem;
+        right: 0.75rem;
+        z-index: 10;
+        display: flex;
+        border: 1px solid currentColor;
+        border-radius: 0.4rem;
+        overflow: hidden;
+        background: inherit;
+      }
+      .theme-switch button {
+        border: 0;
+        background: none;
+        color: inherit;
+        font: inherit;
+        padding: 0.3rem 0.7rem;
+        cursor: pointer;
+      }
+      .theme-switch button.active { background: currentColor; }
+      .theme-switch button.active span { mix-blend-mode: difference; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div class="theme-switch" id="theme-switch">
+      <button data-mode="auto"><span>Auto</span></button>
+      <button data-mode="light"><span>Light</span></button>
+      <button data-mode="dark"><span>Dark</span></button>
+    </div>
+    <aside id="sidebar"></aside>
+    <main>
+      <nav><a href="./index.html">Single demo</a> | <a href="./examples.html">Examples gallery</a></nav>
+      <h1>DIF examples gallery</h1>
+      <p>Showing: <strong id="title">...</strong> <code id="info"></code></p>
+      <canvas id="view" width="320" height="240"></canvas>
+    </main>
+    <!-- The wasm decoder is built for wasm32-wasip1; resolve its wasi import to
+         a no-op shim (the codecs do no I/O on the decode path). -->
+    <script type="importmap">
+      { "imports": { "wasi_snapshot_preview1": "./wasi_shim.js" } }
+    </script>
+    <script type="module" src="./gallery.js"></script>
+  </body>
+</html>
