@@ -161,6 +161,17 @@ wasm-test:
     node --import "{{justfile_directory()}}/web/wasm-test/wasi-resolve.mjs" \
         "{{justfile_directory()}}/web/wasm-test/smoke.mjs"
 
+# Decode-speed bench of the wasm decoder in node: time-budget parse + render per
+# input and report ms/op + Mpx/s. Args pass through (optional mode, then .dif
+# paths; default web/demo/flowchart.dif). Run `just wasm` first to build dist/pkg.
+wasm-bench *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v node >/dev/null || { echo "skip wasm-bench: no node"; exit 0; }
+    [ -f dist/pkg/dif_wasm.js ] || { echo "skip wasm-bench: dist/pkg missing (run just wasm)"; exit 0; }
+    node --import "{{justfile_directory()}}/web/wasm-test/wasi-resolve.mjs" \
+        "{{justfile_directory()}}/web/wasm-test/bench.mjs" {{ARGS}}
+
 # Re-emit the committed demo asset for the current .dif format (run `just py`
 # first so the `dif` module exists). Needed after a container format bump.
 regen-demo:

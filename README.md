@@ -81,6 +81,14 @@ just bench-formats data/testdata/ [options]
 
 See `bench-formats` part to see the option details.
 
+#### Benchmark the wasm Decoder
+```sh
+just wasm        # build dist/pkg first
+just wasm-bench [mode] [file.dif ...]
+```
+
+See `wasm-bench` part to see the option details.
+
 ### Start a Demo Web Server
 ```sh
 just wasm-setup    # one-time wasm toolchain (skip if already done)
@@ -188,3 +196,23 @@ codec specs; palette/frame default to inheriting the outer codec) * `--index-wid
 > them lossless by construction); use `bench-codecs --num-threads N` to actually
 > verify the mt encode path. See [`docs/bench-formats-mt.md`](docs/bench-formats-mt.md)
 > for a committed sample report.
+
+### `wasm-bench` --- decode speed of the in-browser decoder
+
+```sh
+just wasm        # build dist/pkg (run `just wasm-setup` once first)
+just wasm-bench [mode] [file.dif ...]
+```
+
+Times the shipped wasm decoder in node. Decode-only (the wasm build has no
+encode export). Args: an initial **mode** (`light` / `dark` / `high-contrast`,
+default `light`), then any `.dif` / `.difr` **paths** (default
+`web/demo/flowchart.dif`). Skips cleanly without node or `dist/pkg`.
+
+Per input it reports mean ms/op (100 ms warmup, 400 ms window) for two phases:
+**parse** (`Image.fromBytes`: container parse + decompress) and **render**
+(`render`: theme pick to RGBA8 + boundary copy), plus render `Mpx/s`.
+
+> [!NOTE]
+> For headline browser numbers run the decoder in a real browser via
+> `just demo-server`; `wasm-bench` is for relative comparison on a stable host.

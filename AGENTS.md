@@ -85,6 +85,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | `bench-setup [--cuda]` | Build the optional native benchmark codecs (lzav + kanzi + libbsc shims). |
 | `bench-codecs [...]`   | Rank every registered codec over a raw `.difr` body by the `M` metric.    |
 | `bench-formats [...]`  | Compare `.dif` against PNG / WebP / JXL / AVIF / GIF. See `README.md`.    |
+| `wasm-bench [...]`     | Decode-speed bench of the shipped wasm decoder in node (parse + render).  |
 
 ### Spec & aggregate
 | Recipe  | Does                                                                                       |
