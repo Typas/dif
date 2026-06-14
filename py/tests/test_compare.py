@@ -10,7 +10,9 @@ from bench.compare import (
     REL_REF,
     TSV_HEADER,
     _abbr,
+    _avg_opt,
     _dif_label,
+    _mb,
     compare_image,
     format_stats_table,
     format_table,
@@ -94,10 +96,23 @@ def test_tables_and_tsv_rows(tmp_path):
 
     table = format_table(p, rows)
     assert "format" in table and "png" in table
+    # The memory columns are present; without mimalloc preloaded the cells blank.
+    assert "max MB" in table and "mean MB" in table
 
     tsv = list(iter_rows(p, rows))
     assert len(tsv) == len(rows)
     assert all(len(t) == len(TSV_HEADER) for t in tsv)
+    assert "max_mb" in TSV_HEADER and "mean_mb" in TSV_HEADER
+    # mimalloc not preloaded in the test process -> memory unmeasured -> blank cells.
+    mx = TSV_HEADER.index("max_mb")
+    assert all(t[mx] == "" for t in tsv)
+
+
+def test_memory_helpers():
+    assert _mb(None) == "-"
+    assert _mb(1.25) == "1.2"
+    assert _avg_opt([None, None]) is None
+    assert _avg_opt([1.0, None, 3.0]) == 2.0
 
 
 def test_subdir_stats_aggregates(tmp_path):
@@ -114,6 +129,7 @@ def test_subdir_stats_aggregates(tmp_path):
     assert stats[0].n == 2  # aggregated over both images
     md = format_stats_table(stats)
     assert "| format |" in md
+    assert "max MB" in md and "mean MB" in md
 
 
 def test_dif_only_store_baseline(tmp_path):
@@ -139,8 +155,10 @@ def test_dif_only_tsv_has_m_column(tmp_path):
     rows = compare_image(p, repeats=1, outer_codecs=("zstd-3",), dif_only=True)
     tsv = list(iter_rows(p, rows))
     assert all(len(t) == len(TSV_HEADER) for t in tsv)
-    # M column (index 6) is non-empty for available rows.
-    assert all(t[6] != "" for t in tsv if t[7] == 1)
+    ok = TSV_HEADER.index("available")
+    m_col = TSV_HEADER.index("M")
+    # M column is non-empty for available rows.
+    assert all(t[m_col] != "" for t in tsv if t[ok] == 1)
 
 
 def test_dif_only_aggregate_sorts_by_m(tmp_path):

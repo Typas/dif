@@ -25,6 +25,7 @@ from PIL import Image as PILImage
 
 from dif_tools import dif_image_from_array, load_image, resolve_raster
 
+from .memprofile import track_memory
 from .metric import compute_m, speed
 
 # `DIF_TRIPLET` is the shipped encode config --- (outer, palette, frame): outer
@@ -95,6 +96,8 @@ class FormatResult:
     lossless: bool = True
     note: str = ""
     m: float = float("nan")  # M score relative to store baseline (dif_only mode)
+    max_mb: float | None = None
+    mean_mb: float | None = None
 
 
 def _as_rgb(arr: np.ndarray) -> np.ndarray:
@@ -122,12 +125,26 @@ def _measure(
     note: str = "",
 ) -> FormatResult:
     try:
-        blob = enc()
-        decoded = dec(blob)
+        # Memory sampled over one untimed encode+decode (delta over baseline);
+        # the timed `speed(...)` passes below stay outside so profiling never
+        # distorts the throughput numbers.
+        with track_memory() as pk:
+            blob = enc()
+            decoded = dec(blob)
         lossless = True if expected is None else _equal(decoded, expected)
         e, _ = speed(enc, nbytes, repeats)
         d, _ = speed(lambda: dec(blob), nbytes, repeats)
-        return FormatResult(name, len(blob), e / 1e6, d / 1e6, True, lossless, note)
+        return FormatResult(
+            name,
+            len(blob),
+            e / 1e6,
+            d / 1e6,
+            True,
+            lossless,
+            note,
+            max_mb=pk.max_mb,
+            mean_mb=pk.mean_mb,
+        )
     except Exception as exc:  # noqa: BLE001
         return FormatResult(name, 0, 0, 0, False, note=type(exc).__name__)
 
@@ -361,14 +378,30 @@ _FMT_W = 25
 _SIZE_W = 10
 _SPD_W = 12
 _REL_W = 6
+_MEM_W = 8
 _NOTE_W = 6
+
+
+def _mb(v: float | None) -> str:
+    """Format a memory MB value, or ``-`` when unmeasured (mimalloc not preloaded)."""
+    return "-" if v is None else f"{v:.1f}"
+
+
+def _avg_opt(values: list[float | None]) -> float | None:
+    """Mean of the measured values, or ``None`` when none were measured."""
+    present = [v for v in values if v is not None]
+    return statistics.mean(present) if present else None
+
+
 _HEAD = (
     f"| {'format':^{_FMT_W}} | {'size':^{_SIZE_W}} | {'enc MB/s':^{_SPD_W}} "
-    f"| {'dec MB/s':^{_SPD_W}} | {'rel':^{_REL_W}} | {'note':^{_NOTE_W}} |"
+    f"| {'dec MB/s':^{_SPD_W}} | {'rel':^{_REL_W}} | {'max MB':^{_MEM_W}} "
+    f"| {'mean MB':^{_MEM_W}} | {'note':^{_NOTE_W}} |"
 )
 _SEP = (
     f"|{'-' * (_FMT_W + 2)}|{'-' * (_SIZE_W + 2)}|{'-' * (_SPD_W + 2)}"
-    f"|{'-' * (_SPD_W + 2)}|{'-' * (_REL_W + 2)}|{'-' * (_NOTE_W + 2)}|"
+    f"|{'-' * (_SPD_W + 2)}|{'-' * (_REL_W + 2)}|{'-' * (_MEM_W + 2)}"
+    f"|{'-' * (_MEM_W + 2)}|{'-' * (_NOTE_W + 2)}|"
 )
 
 
@@ -376,12 +409,14 @@ def _row_line(r: FormatResult, ref_size: int | None) -> str:
     if not r.available:
         return (
             f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
-            f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {r.note:^{_NOTE_W}} |"
+            f"| {'':^{_SPD_W}} | {'':^{_REL_W}} | {'':^{_MEM_W}} "
+            f"| {'':^{_MEM_W}} | {r.note:^{_NOTE_W}} |"
         )
     rel = f"x{r.size / ref_size:.2f}" if ref_size else ""
     return (
         f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
-        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {r.note:^{_NOTE_W}} |"
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {rel:>{_REL_W}} | {_mb(r.max_mb):>{_MEM_W}} "
+        f"| {_mb(r.mean_mb):>{_MEM_W}} | {r.note:^{_NOTE_W}} |"
     )
 
 
@@ -389,11 +424,13 @@ def _row_line(r: FormatResult, ref_size: int | None) -> str:
 _DIF_M_W = 8
 _DIF_HEAD = (
     f"| {'format':^{_FMT_W}} | {'size':^{_SIZE_W}} | {'enc MB/s':^{_SPD_W}} "
-    f"| {'dec MB/s':^{_SPD_W}} | {'M':^{_DIF_M_W}} | {'note':^{_NOTE_W}} |"
+    f"| {'dec MB/s':^{_SPD_W}} | {'M':^{_DIF_M_W}} | {'max MB':^{_MEM_W}} "
+    f"| {'mean MB':^{_MEM_W}} | {'note':^{_NOTE_W}} |"
 )
 _DIF_SEP = (
     f"|{'-' * (_FMT_W + 2)}|{'-' * (_SIZE_W + 2)}|{'-' * (_SPD_W + 2)}"
-    f"|{'-' * (_SPD_W + 2)}|{'-' * (_DIF_M_W + 2)}|{'-' * (_NOTE_W + 2)}|"
+    f"|{'-' * (_SPD_W + 2)}|{'-' * (_DIF_M_W + 2)}|{'-' * (_MEM_W + 2)}"
+    f"|{'-' * (_MEM_W + 2)}|{'-' * (_NOTE_W + 2)}|"
 )
 
 
@@ -401,12 +438,14 @@ def _dif_row_line(r: FormatResult) -> str:
     if not r.available:
         return (
             f"| {r.name:^{_FMT_W}} | {'n/a':^{_SIZE_W}} | {'':^{_SPD_W}} "
-            f"| {'':^{_SPD_W}} | {'':^{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
+            f"| {'':^{_SPD_W}} | {'':^{_DIF_M_W}} | {'':^{_MEM_W}} "
+            f"| {'':^{_MEM_W}} | {r.note:^{_NOTE_W}} |"
         )
     m_str = f"{r.m:.2f}" if r.m == r.m else ""  # nan check
     return (
         f"| {r.name:^{_FMT_W}} | {r.size:>{_SIZE_W}} | {r.enc_mbps:>{_SPD_W}.1f} "
-        f"| {r.dec_mbps:>{_SPD_W}.1f} | {m_str:>{_DIF_M_W}} | {r.note:^{_NOTE_W}} |"
+        f"| {r.dec_mbps:>{_SPD_W}.1f} | {m_str:>{_DIF_M_W}} | {_mb(r.max_mb):>{_MEM_W}} "
+        f"| {_mb(r.mean_mb):>{_MEM_W}} | {r.note:^{_NOTE_W}} |"
     )
 
 
@@ -425,6 +464,8 @@ TSV_HEADER = (
     "dec_mbps",
     "rel",
     "M",
+    "max_mb",
+    "mean_mb",
     "available",
     "note",
 )
@@ -445,6 +486,8 @@ def iter_rows(path: str | Path, rows: list[FormatResult]):
             f"{r.dec_mbps:.2f}" if r.available else "",
             rel,
             m_val,
+            "" if r.max_mb is None else f"{r.max_mb:.1f}",
+            "" if r.mean_mb is None else f"{r.mean_mb:.1f}",
             int(r.available),
             r.note,
         )
@@ -469,6 +512,8 @@ class FormatStat:
     dec_mbps: float
     rel_mean: float
     m_mean: float = float("nan")
+    max_mb: float | None = None
+    mean_mb: float | None = None
     note: str = ""
 
 
@@ -493,6 +538,8 @@ def _aggregate(reports: Sequence[ImageRows]) -> list[FormatStat]:
                 statistics.mean(r.dec_mbps for r in rs),
                 statistics.mean(rels) if rels else float("nan"),
                 statistics.mean(ms) if ms else float("nan"),
+                _avg_opt([r.max_mb for r in rs]),
+                _avg_opt([r.mean_mb for r in rs]),
                 rs[-1].note,
             )
         )
@@ -533,24 +580,24 @@ def format_stats_table(stats: list[FormatStat]) -> str:
     has_m = any(s.m_mean == s.m_mean for s in stats)
     if has_m:
         rows = [
-            "| format | n | size | enc MB/s | dec MB/s | M mean | note |",
-            "|---|--:|--:|--:|--:|--:|---|",
+            "| format | n | size | enc MB/s | dec MB/s | M mean | max MB | mean MB | note |",
+            "|---|--:|--:|--:|--:|--:|--:|--:|---|",
         ]
         for s in stats:
             m_str = "" if s.m_mean != s.m_mean else f"{s.m_mean:.3f}"
             rows.append(
                 f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
-                f"| {s.dec_mbps:.1f} | {m_str} | {s.note} |"
+                f"| {s.dec_mbps:.1f} | {m_str} | {_mb(s.max_mb)} | {_mb(s.mean_mb)} | {s.note} |"
             )
     else:
         rows = [
-            "| format | n | size | enc MB/s | dec MB/s | rel | note |",
-            "|---|--:|--:|--:|--:|--:|---|",
+            "| format | n | size | enc MB/s | dec MB/s | rel | max MB | mean MB | note |",
+            "|---|--:|--:|--:|--:|--:|--:|--:|---|",
         ]
         for s in stats:
             rel = "" if s.rel_mean != s.rel_mean else f"x{s.rel_mean:.2f}"  # nan guard
             rows.append(
                 f"| {s.name} | {s.n} | {s.size_mean:.0f} | {s.enc_mbps:.1f} "
-                f"| {s.dec_mbps:.1f} | {rel} | {s.note} |"
+                f"| {s.dec_mbps:.1f} | {rel} | {_mb(s.max_mb)} | {_mb(s.mean_mb)} | {s.note} |"
             )
     return "\n".join(rows)

@@ -289,13 +289,23 @@ bench-setup *ARGS:
     rm -rf py/bench/_native
     uv run python -m bench setup {{ARGS}}
 
-# Rank codecs over a .difr body by the M metric.
-bench-codecs *ARGS:
-    uv run python -m bench codecs {{ARGS}}
+# Resolve the installed jemalloc shared object (handles a versioned soname like
+# libjemalloc.so.2 when the bare .so symlink from -devel is absent). Empty if none
+# is installed -> LD_PRELOAD stays empty -> the memory columns blank, benchmark runs.
+jemalloc := `ldconfig -p 2>/dev/null | awk -F'=> ' '/libjemalloc/{print $2; exit}'`
 
-# Compare DIF against PNG / WebP / JXL / AVIF / GIF.
+# Rank codecs over a .difr body by the M metric. jemalloc is LD_PRELOADed so the
+# max/mean MB columns get real numbers (install it system-wide, e.g.
+# `dnf install jemalloc`, or set LD_PRELOAD to your own build); without it the
+# memory columns blank out and the rest of the benchmark is unaffected. (mimalloc's
+# distro build compiles its stat counters out, so it cannot report this.)
+bench-codecs *ARGS:
+    LD_PRELOAD="${LD_PRELOAD:-{{jemalloc}}}" uv run python -m bench codecs {{ARGS}}
+
+# Compare DIF against PNG / WebP / JXL / AVIF / GIF. See bench-codecs re: jemalloc
+# (LD_PRELOAD) for the max/mean MB columns.
 bench-formats *ARGS:
-    uv run python -m bench formats {{ARGS}}
+    LD_PRELOAD="${LD_PRELOAD:-{{jemalloc}}}" uv run python -m bench formats {{ARGS}}
 
 # Python test suite (run `just py` first so the `dif` module exists).
 py-test:
