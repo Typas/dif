@@ -99,7 +99,9 @@ _LIBBSC_CPP = (
 _SHIM_C = """
 #include "lzav.h"
 int shim_bound(int n){ return lzav_compress_bound(n); }
+int shim_bound_hi(int n){ return lzav_compress_bound_hi(n); }
 int shim_compress(const void* s, void* d, int sl, int dl){ return lzav_compress_default(s,d,sl,dl); }
+int shim_compress_hi(const void* s, void* d, int sl, int dl){ return lzav_compress_hi(s,d,sl,dl); }
 int shim_decompress(const void* s, void* d, int sl, int dl){ return lzav_decompress(s,d,sl,dl); }
 """
 
@@ -137,23 +139,18 @@ def build_lzav() -> bool:  # pragma: no cover
         return False
 
 
-def _lzav_codec() -> "Codec | None":
+def _lzav_codecs() -> "list[Codec]":
+    """lzav-1 (default level) and lzav-2 (high ratio). Both decode via the same
+    format-tagged ``lzav_decompress``. Empty when the shim isn't built."""
     if not _LZAV_SO.exists():
-        return None
+        return []
     lib = ctypes.CDLL(str(_LZAV_SO))
-    lib.shim_bound.restype = ctypes.c_int
-    lib.shim_bound.argtypes = [ctypes.c_int]
-    for fn in (lib.shim_compress, lib.shim_decompress):
+    for fn in (lib.shim_bound, lib.shim_bound_hi):
+        fn.restype = ctypes.c_int
+        fn.argtypes = [ctypes.c_int]
+    for fn in (lib.shim_compress, lib.shim_compress_hi, lib.shim_decompress):
         fn.restype = ctypes.c_int
         fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-
-    def compress(data: bytes) -> bytes:
-        bound = lib.shim_bound(len(data))
-        dst = ctypes.create_string_buffer(bound)
-        n = lib.shim_compress(data, dst, len(data), bound)
-        if n <= 0:
-            raise RuntimeError("lzav compress failed")
-        return dst.raw[:n]
 
     def decompress(comp: bytes, orig_len: int) -> bytes:
         dst = ctypes.create_string_buffer(orig_len)
@@ -162,9 +159,27 @@ def _lzav_codec() -> "Codec | None":
             raise RuntimeError("lzav decompress failed")
         return dst.raw[:n]
 
+    def _make_compress(bound_fn, compress_fn):
+        def compress(data: bytes) -> bytes:
+            bound = bound_fn(len(data))
+            dst = ctypes.create_string_buffer(bound)
+            n = compress_fn(data, dst, len(data), bound)
+            if n <= 0:
+                raise RuntimeError("lzav compress failed")
+            return dst.raw[:n]
+
+        return compress
+
     from .codecs import Codec as _C
 
-    return _C("lzav-1", compress, decompress)
+    return [
+        _C("lzav-1", _make_compress(lib.shim_bound, lib.shim_compress), decompress),
+        _C(
+            "lzav-2",
+            _make_compress(lib.shim_bound_hi, lib.shim_compress_hi),
+            decompress,
+        ),
+    ]
 
 
 def build_kanzi() -> bool:  # pragma: no cover
@@ -521,9 +536,7 @@ def _libbsc_codecs() -> list["Codec"]:
 
 def codecs() -> list["Codec"]:
     out: list[Codec] = []
-    c = _lzav_codec()
-    if c is not None:
-        out.append(c)
+    out.extend(_lzav_codecs())
     out.extend(_kanzi_codecs())
     out.extend(_libbsc_codecs())
     return out

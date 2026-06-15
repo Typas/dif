@@ -183,7 +183,7 @@ fn compress(method: Method, level: i32, data: &[u8], workers: u32) -> Result<Vec
         Method::Brotli => brotli_compress(data, level.clamp(0, 11) as u8, workers),
         Method::Zstd => zstd_compress(data, level, workers, None),
         Method::Lz4 => Ok(lz4_flex::block::compress(data)),
-        Method::Lzav => lzav_compress(data),
+        Method::Lzav => lzav_compress(data, level),
         Method::Bsc => bsc_compress(data, level),
     }
 }
@@ -233,11 +233,17 @@ fn deflate_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-// --- Lzav: C shim (native or zig-cross wasm). `lzav-1` is the single level. ---
+// --- Lzav: C shim (native or zig-cross wasm). `lzav-1` = default level,
+//     `lzav-2` = high-ratio (`lzav_compress_hi`); decode is format-tagged. ---
 
 #[cfg(feature = "c-codecs")]
-fn lzav_compress(data: &[u8]) -> Result<Vec<u8>> {
-    lzav_shim::compress(data).ok_or(DifError::CompressionFailed)
+fn lzav_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    let out = if level >= 2 {
+        lzav_shim::compress_hi(data)
+    } else {
+        lzav_shim::compress(data)
+    };
+    out.ok_or(DifError::CompressionFailed)
 }
 
 #[cfg(feature = "c-codecs")]
@@ -246,7 +252,7 @@ fn lzav_decompress(data: &[u8], raw_len: usize) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(feature = "c-codecs"))]
-fn lzav_compress(_data: &[u8]) -> Result<Vec<u8>> {
+fn lzav_compress(_data: &[u8], _level: i32) -> Result<Vec<u8>> {
     Err(DifError::Invalid("lzav codec requires a C-codec feature"))
 }
 
@@ -858,6 +864,7 @@ mod tests {
         {
             codecs.push("zstd-3");
             codecs.push("lzav-1");
+            codecs.push("lzav-2");
             codecs.push("bsc-2");
         }
         for name in codecs {

@@ -45,7 +45,7 @@ def test_libbsc_load_none_without_shim(monkeypatch):
 def test_codec_absent_branches(monkeypatch):
     monkeypatch.setattr(native, "_LZAV_SO", Path("/nonexistent/lzav.so"))
     monkeypatch.setattr(native, "_KANZI_SO", Path("/nonexistent/kanzi.so"))
-    assert native._lzav_codec() is None
+    assert native._lzav_codecs() == []
     assert native._kanzi_codecs() == []
 
 
