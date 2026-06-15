@@ -7,7 +7,8 @@
 //! each frame with their own codec under an outer pass.
 
 use dif_core::{
-    abilities, from_dif_workers, from_difr, indexed_from_rgba8, to_dif_workers, to_difr, Codec,
+    abilities, build_regional, from_dif_workers, from_difr, indexed_from_rgba8, to_dif_workers,
+    to_difr, Codec,
     ColorDepth, DifError, DifImage, Frame, IndexWidth, Rgba, Strategy, Theme, ThemeTag,
 };
 use pyo3::exceptions::PyValueError;
@@ -205,6 +206,42 @@ impl Image {
         });
         self.inner.validate().map_err(map_err)?;
         Ok(())
+    }
+
+
+    /// Build a two-theme (light + dark) image from raw RGBA, **preprocess-first**:
+    /// the raw pixels are classified (background / foreground / anti-aliasing)
+    /// before the light palette is built, so the index plane is split by
+    /// `(color, class)` from the start. The light theme is bit-exact; an AA fringe
+    /// snaps to its nearest solid neighbor's dark color. Replaces the
+    /// `indexed_from_rgba8` + `add_dark_theme_regional` two-step for the regional
+    /// path. `index_width` is `None` (auto), `8`, or `16`.
+    #[staticmethod]
+    #[pyo3(signature = (width, height, rgba, strategy="arithmetic", index_width=None))]
+    fn regional_from_rgba8(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        strategy: &str,
+        index_width: Option<u32>,
+    ) -> PyResult<Image> {
+        let strat = Strategy::from_name(strategy).map_err(map_err)?;
+        let want = match index_width {
+            None => None,
+            Some(8) => Some(IndexWidth::Bit8),
+            Some(16) => Some(IndexWidth::Bit16),
+            Some(n) => {
+                return Err(PyValueError::new_err(format!(
+                    "index_width must be 8 or 16, got {n}"
+                )))
+            }
+        };
+        let (inner, source_colors, _report) =
+            build_regional(width, height, rgba, want, strat).map_err(map_err)?;
+        Ok(Image {
+            inner,
+            source_colors,
+        })
     }
 
     /// Encode to a compressed `.dif` container. `codec` is the outer whole-body

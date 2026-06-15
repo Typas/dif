@@ -84,6 +84,18 @@ cov-encode-missing:
 cov-encode:
     cargo llvm-cov -p dif-core --features encode
 
+# Name every dif-core function with zero coverage under a feature set (default
+# encode). Pinpoints the exact uncovered function the summary's "Missed
+# Functions" count refers to. ARG is the feature flag set, e.g. "--features native".
+cov-funcs ARG="--features encode":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo llvm-cov -p dif-core {{ARG}} --json --output-path target/cov-funcs.json >/dev/null 2>&1
+    jq -r '[.data[0].functions[] | select(.count==0)] as $m
+        | "\($m|length) uncovered function(s):",
+          ($m[] | "  \(.filenames[0]|split("/")|last):\([.regions[][0]]|min)  \(.name)")' \
+        target/cov-funcs.json
+
 # Core matrix (all tiers build, both test sets pass) + the Python, wasm, and
 # extension suites.
 #

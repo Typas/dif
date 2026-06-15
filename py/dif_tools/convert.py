@@ -76,7 +76,10 @@ def image_to_dif_image(
 
 
 def dif_image_from_array(
-    arr: np.ndarray, strategy: str = "arithmetic", index_width: str = "auto"
+    arr: np.ndarray,
+    strategy: str = "arithmetic",
+    index_width: str = "auto",
+    regional: bool = True,
 ) -> "dif.Image":
     """Build a :class:`dif.Image` from an already-loaded ``(H, W, 4)`` RGBA8 array.
 
@@ -86,6 +89,9 @@ def dif_image_from_array(
     ``"keep"`` stores a single (light) theme; any other adds the dark theme.
     ``index_width`` is ``"auto"`` (smallest fitting width, quantizing only above
     16-bit), ``"8"``, or ``"16"`` (force that width, quantizing down to fit).
+    ``regional`` (default ``True``) uses the region-aware dark derivation
+    (background / foreground / anti-aliasing classification); set ``False`` for
+    the legacy per-color derivation (A/B comparison).
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"strategy must be one of {STRATEGIES}, got {strategy!r}")
@@ -97,14 +103,17 @@ def dif_image_from_array(
     # ~99% of DIF encode time).
     h, w = arr.shape[:2]
     rgba = np.ascontiguousarray(arr[..., :4], dtype=np.uint8).tobytes()
-    img = dif.Image.indexed_from_rgba8(w, h, rgba, iw)
+    strat = cast("dif.Strategy", strategy)
 
-    # Synthesize the dark theme natively: the OKLab palette derivation runs in
-    # Rust off the small light palette, so no palette crosses the FFI boundary.
-    # `"keep"` leaves the image single-theme.
+    # Preprocess-first regional path: classify the raw pixels, then build the
+    # light index split by `(color, class)` and seed the dark theme in one Rust
+    # call. `"keep"` and the legacy per-color path skip the spatial classifier.
+    if regional and strategy != "keep":
+        return dif.Image.regional_from_rgba8(w, h, rgba, strat, iw)
+
+    img = dif.Image.indexed_from_rgba8(w, h, rgba, iw)
     if strategy != "keep":
-        # `strategy` is a runtime str (argparse-validated); narrow to the alias.
-        img.add_dark_theme(cast("dif.Strategy", strategy))
+        img.add_dark_theme(strat)
     return img
 
 

@@ -8,7 +8,7 @@
 
 | Path                                                             | What                                                                                             |
 |------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| `crates/dif-core/`                                               | Rust core: container (`codec.rs`), raw layout (`format.rs`), dark-theme derivation (`derive.rs`) |
+| `crates/dif-core/`                                               | Rust core: thin crate root (`lib.rs`, no fn/impl), container types + `indexed_from_rgba8` (`container.rs`), on-disk codec (`codec.rs`) + raw layout (`format.rs`), per-color dark transform (`derive.rs`), region-aware dark build (`regional.rs::build_regional`) |
 | `crates/dif-py/`                                                 | Python extension (`dif`), built with maturin                                                     |
 | `crates/dif-wasm/`                                               | Browser decoder (wasm)                                                                           |
 | `crates/lzav-shim/`, `crates/kanzi-shim/`, `crates/libbsc-shim/` | C-codec shims for the benchmark                                                                  |
@@ -40,6 +40,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | `test-encode`                                   | Test with `encode` (OKLab quantize + dark-theme derivation).                               |
 | `test-native`                                   | Test with all native codecs.                                                               |
 | `cov` / `cov-std` / `cov-encode` / `cov-native` | Line coverage per feature set; `cov-all` runs all four. `*-missing` names uncovered lines. |
+| `cov-funcs [ARG]`                               | Names every zero-coverage function (with file:line) for a feature set (`ARG`, default `--features encode`); pinpoints the gap behind the "Missed Functions" count. Uses `jq`. |
 | `test-all`                                      | Every feature tested: core matrix + `py-test` + `wasm-test` + `ext-test`.                  |
 | `fmt` / `fmt-check`                             | `cargo fmt` (write / check).                                                               |
 | `clippy`                                        | Clippy with `--all-features -D warnings`.                                                  |

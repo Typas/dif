@@ -103,6 +103,38 @@ def test_derived_dark_differs(tmp_path):
     assert bytes(light) != bytes(dark)
 
 
+def _stroke_arr():
+    # Light-gray fill with a thin dark stroke (foreground-like) used in two
+    # places, so the region-aware path may split the stroke color.
+    arr = np.full((20, 20, 4), 240, np.uint8)
+    arr[..., 3] = 255
+    arr[5:15, 10, :3] = (20, 20, 20)
+    arr[2, 2:18, :3] = (20, 20, 20)
+    return arr
+
+
+def test_regional_dark_is_lossless_and_two_theme():
+    arr = _stroke_arr()
+    img = dif_image_from_array(arr, "arithmetic", regional=True)
+    assert len(img.themes) == 2  # light + derived dark
+    _, _, rgba = img.render("light", _LIGHT, 0)
+    got = np.frombuffer(rgba, np.uint8).reshape(20, 20, 4)
+    assert np.array_equal(got, arr), "regional light theme must stay lossless"
+    # Light and dark renders differ.
+    _, _, dark = img.render("dark", (0, 0, 0), 0)
+    assert bytes(rgba) != bytes(dark)
+
+
+def test_regional_vs_legacy_light_lossless():
+    arr = _stroke_arr()
+    regional = dif_image_from_array(arr, "arithmetic", regional=True)
+    legacy = dif_image_from_array(arr, "arithmetic", regional=False)
+    # Both round-trip the light theme identically (regional only changes dark).
+    _, _, r = regional.render("light", _LIGHT, 0)
+    _, _, le = legacy.render("light", _LIGHT, 0)
+    assert np.array_equal(np.frombuffer(r, np.uint8), np.frombuffer(le, np.uint8))
+
+
 def test_invert_palette_is_negative():
     colors = np.array(
         [[0, 0, 0, 255], [255, 255, 255, 255], [200, 30, 40, 128]], np.int64

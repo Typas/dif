@@ -70,6 +70,20 @@ class Image:
         with abilities=dark. No palette crosses the FFI boundary."""
         ...
 
+    @staticmethod
+    def regional_from_rgba8(
+        width: int,
+        height: int,
+        rgba: bytes,
+        strategy: Strategy = ...,
+        index_width: int | None = ...,
+    ) -> Image:
+        """Build a two-theme (light + dark) image from raw RGBA, preprocess-first:
+        classify the raw pixels, then build the light index split by `(color, class)`
+        and seed the dark theme (AA fringe snaps to its nearest solid neighbor). The
+        light theme is bit-exact. `index_width` is `None` (auto), `8`, or `16`."""
+        ...
+
     def to_dif(
         self,
         codec: CodecName = ...,
