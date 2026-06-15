@@ -184,10 +184,12 @@ wasm-bench *ARGS:
     node --import "{{justfile_directory()}}/web/wasm-test/wasi-resolve.mjs" \
         "{{justfile_directory()}}/web/wasm-test/bench.mjs" {{ARGS}}
 
-# Re-emit the committed demo asset for the current .dif format (run `just py`
-# first so the `dif` module exists). Needed after a container format bump.
+# Re-draw the committed demo asset from scratch (the script is its source of
+# truth --- no upstream image) for the current .dif format + dark derivation.
+# Run `just py` first so the `dif` module exists. Needed after a container
+# format bump or a palette/derivation change.
 regen-demo:
-    uv run python py/regen_flowchart.py
+    uv run python py/gen_flowchart.py
 
 # Build the wasm decoder and stage a self-contained site into dist/demo/: the two
 # pages (single demo + examples gallery), the dist/pkg decoder, the sample .dif,

@@ -54,7 +54,7 @@ A bare `just` (or `just --list`) prints every recipe.
 | `wasm-test`            | Smoke-test the decoder in node: decode `web/demo/flowchart.dif` (run `wasm` first; skips without node).            |
 | `demo-server [port]`   | Build the decoder, stage a self-contained demo into `dist/demo/`, and serve it at `http://localhost:8000/`.        |
 | `convert IN OUT [...]` | Convert one image or `.drawio` to `.dif` (shipped store/zstd-16/zstd-10 triplet; override any arg).                |
-| `regen-demo`           | Re-emit the committed demo `.dif` for the current format (run `py` first).                                         |
+| `regen-demo`           | Re-draw the committed demo `.dif` from scratch (`py/gen_flowchart.py`, its own source of truth) for the current format (run `py` first). |
 | `regen-examples`       | Regenerate every committed `.dif` under `data/dif-examples/` from its `data/testdata/` source (run `py` first).    |
 
 ### VS Code / Codium / Cursor extension
