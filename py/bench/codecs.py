@@ -192,6 +192,69 @@ def _dynamic_libbsc(token: str) -> Codec | None:
     return _native.make_libbsc(token.split("-", 1)[1])
 
 
+def _core_accepts(token: str) -> bool:
+    """True when dif-core's ``Codec::parse`` accepts ``token`` (the format can
+    actually store this codec/level). The single source of truth for which zstd/lz4
+    levels are benchable, so the standalone registry never drifts from the core."""
+    try:
+        import dif
+    except ImportError:  # pragma: no cover - dif is always built for the bench
+        return False
+    try:
+        dif.validate_codec(token)
+        return True
+    except ValueError:
+        return False
+
+
+def _dynamic_zstd(token: str) -> Codec | None:
+    """Build a pyzstd codec for any core-valid zstd level not pre-registered
+    (``zstd--7``, ``zstd-16``, ...). ``None`` when ``token`` isn't a core-accepted
+    ``zstd-<level>`` spec or pyzstd is missing."""
+    if not token.startswith("zstd-") or not _core_accepts(token):
+        return None
+    try:
+        import pyzstd
+    except ImportError:  # pragma: no cover - guarded by _core_accepts deps
+        return None
+    lvl = int(token[len("zstd-") :])
+    return Codec(
+        token,
+        (lambda lv: lambda d: pyzstd.compress(d, lv))(lvl),
+        lambda c, n: pyzstd.decompress(c),
+        mt_compress=_zstd_mt(lvl),
+    )
+
+
+def _dynamic_lz4(token: str) -> Codec | None:
+    """Build an lz4.block codec for any core-valid lz4 level not pre-registered
+    (``lz4-fast512``, ``lz4-hc10``, ...). Core spells lz4 levels ``fast<n>`` (fast
+    acceleration) / ``hc<n>`` (HC level). ``None`` when ``token`` isn't a
+    core-accepted ``lz4-<level>`` spec or lz4 is missing."""
+    if not token.startswith("lz4-") or not _core_accepts(token):
+        return None
+    try:
+        import lz4.block as lz4b
+    except ImportError:  # pragma: no cover - guarded by _core_accepts deps
+        return None
+    rest = token[len("lz4-") :]
+    if rest.startswith("fast"):
+        accel = int(rest[len("fast") :])
+        comp = (
+            lambda a: lambda d: lz4b.compress(
+                d, mode="fast", acceleration=a, store_size=True
+            )
+        )(accel)
+    else:  # hc<n>
+        lvl = int(rest[len("hc") :])
+        comp = (
+            lambda lv: lambda d: lz4b.compress(
+                d, mode="high_compression", compression=lv, store_size=True
+            )
+        )(lvl)
+    return Codec(token, comp, lambda c, n: lz4b.decompress(c))
+
+
 def select_codecs(specs: list[str] | None, num_threads: int = 1) -> list[Codec]:
     """Filter the registry by lzbench ``-e`` tokens (see ``bench.__main__._codecs``).
 
@@ -199,8 +262,11 @@ def select_codecs(specs: list[str] | None, num_threads: int = 1) -> list[Codec]:
     a ``family-level`` token (``zstd-3``) selects that exact codec. Matching is
     against the names shown in the table, with the ``bsc``/``deflate`` aliases.
     A ``libbsc-<b/m/e>`` token (``bsc-b1m3e2``) not among the registered defaults
-    is built on demand from the shim. ``None``/empty = the whole registry. Raises
-    ``ValueError`` naming any token that matches no codec.
+    is built on demand from the shim; likewise any ``zstd-<level>`` / ``lz4-<level>``
+    the core accepts (``zstd--7``, ``lz4-hc10``) is built on demand, so the bench can
+    reach every level the format can store, not just the pre-registered handful.
+    ``None``/empty = the whole registry. Raises ``ValueError`` naming any token that
+    matches no codec.
     """
     if not specs:
         return all_codecs(num_threads)
@@ -217,7 +283,8 @@ def select_codecs(specs: list[str] | None, num_threads: int = 1) -> list[Codec]:
     for orig, t in zip(specs, tokens):
         if t in matched:
             continue
-        c = _dynamic_libbsc(t)  # on-demand libbsc b/m/e spec?
+        # on-demand: libbsc b/m/e spec, or any core-valid zstd/lz4 level
+        c = _dynamic_libbsc(t) or _dynamic_zstd(t) or _dynamic_lz4(t)
         if c is not None:
             out.append(_select(c, num_threads))
             matched.add(t)

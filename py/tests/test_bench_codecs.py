@@ -53,3 +53,38 @@ def test_select_codecs_none_returns_registry():
 def test_select_codecs_unknown_raises():
     with pytest.raises(ValueError, match="no registered codec matches"):
         cd.select_codecs(["definitely-not-a-codec"])
+
+
+def test_core_accepts_matches_dif_parse():
+    assert cd._core_accepts("zstd--7") is True
+    assert cd._core_accepts("lz4-hc10") is True
+    assert cd._core_accepts("zstd-19") is False  # not in the core level table
+    assert cd._core_accepts("nonsense") is False
+
+
+def test_dynamic_zstd_builds_off_list_level():
+    assert cd._dynamic_zstd("lz4-hc2") is None  # wrong family
+    assert cd._dynamic_zstd("zstd-19") is None  # core won't store level 19
+    c = cd._dynamic_zstd("zstd--7")
+    assert c is not None and c.name == "zstd--7"
+    data = bytes(range(256)) * 64
+    assert c.decompress(c.compress(data), len(data)) == data
+
+
+def test_dynamic_lz4_builds_fast_and_hc_levels():
+    assert cd._dynamic_lz4("zstd-3") is None  # wrong family
+    data = bytes(range(256)) * 64
+    for tok in ("lz4-fast512", "lz4-hc10"):
+        c = cd._dynamic_lz4(tok)
+        assert c is not None and c.name == tok
+        assert c.decompress(c.compress(data), len(data)) == data
+
+
+def test_select_codecs_reaches_full_core_range():
+    names = [c.name for c in cd.select_codecs(["zstd--7", "lz4-hc2", "lz4-fast512"])]
+    assert names == ["zstd--7", "lz4-hc2", "lz4-fast512"]
+
+
+def test_select_codecs_unstorable_level_raises():
+    with pytest.raises(ValueError, match="no registered codec matches"):
+        cd.select_codecs(["zstd-19"])  # valid family, level the core can't store
