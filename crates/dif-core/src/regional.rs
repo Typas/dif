@@ -362,10 +362,38 @@ pub fn build_regional(
         merge_splits(&cid, &freq, &prov_light, &prov_dark, depth, capacity);
     let split_indices = fin_light.len() as u64;
 
+    // Re-sort the merged palette by descending TOTAL color frequency (ties by
+    // ascending packed light color), restoring the `indexed_from_rgba8` invariant
+    // that the hottest color gets the lowest index. merge_splits emits entries in
+    // provisional `(color, class)`-pair-frequency order; split + merge can leave a
+    // color ranked by its largest single-class count instead of its total, so the
+    // final plane is not strictly frequency-ordered. Relabel here so the low-index
+    // (low-high-byte) runs match the non-regional path exactly.
+    let nf = fin_light.len();
+    let mut final_freq = alloc::vec![0u64; nf];
+    for (&fin, &f) in prov_to_final.iter().zip(freq.iter()) {
+        final_freq[fin as usize] += f as u64;
+    }
+    let pack = |c: &Rgba| -> u64 {
+        ((c.r as u64) << 48) | ((c.g as u64) << 32) | ((c.b as u64) << 16) | c.a as u64
+    };
+    let mut order: Vec<u32> = (0..nf as u32).collect();
+    order.sort_unstable_by(|&a, &b| {
+        final_freq[b as usize]
+            .cmp(&final_freq[a as usize])
+            .then_with(|| pack(&fin_light[a as usize]).cmp(&pack(&fin_light[b as usize])))
+    });
+    let mut old_to_new = alloc::vec![0u32; nf];
+    for (new, &old) in order.iter().enumerate() {
+        old_to_new[old as usize] = new as u32;
+    }
+    let fin_light: Vec<Rgba> = order.iter().map(|&o| fin_light[o as usize]).collect();
+    let fin_dark: Vec<Rgba> = order.iter().map(|&o| fin_dark[o as usize]).collect();
+
     let indices: Vec<u64> = (0..px)
         .map(|p| {
             let prov = key_index[&(dense_idx[p], cls[p])];
-            prov_to_final[prov as usize] as u64
+            old_to_new[prov_to_final[prov as usize] as usize] as u64
         })
         .collect();
 
