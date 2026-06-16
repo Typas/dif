@@ -319,27 +319,29 @@ bench-setup *ARGS:
 # is installed -> LD_PRELOAD stays empty -> the memory columns blank, benchmark runs.
 jemalloc := `ldconfig -p 2>/dev/null | awk -F'=> ' '/libjemalloc/{print $2; exit}'`
 
-# Disable jemalloc's dirty/muzzy page decay for the bench run. jemalloc default
-# (muzzy_decay_ms:0) madvise()s freed large extents straight back to the kernel, so
-# each timed decode iteration re-faults zeroed pages -> a process-wide throughput
-# floor (zstd decode measured ~2.8x slow vs glibc's warm-arena reuse). `-1` pins the
-# extents in the arena like glibc; stats.allocated still moves, so the memory columns
-# stay correct. Only set when we actually preload jemalloc.
+# Pin jemalloc's dirty/muzzy page decay off for the bench run. jemalloc default
+# (muzzy_decay_ms:0) madvise()s freed large extents back to the kernel, so each timed
+# iteration re-faults zeroed pages; `-1` keeps them warm in-arena. This recovers PART
+# of the slowdown, not all: running under jemalloc at all still measures zstd decode
+# well below a glibc run (the allocator itself, not just decay). stats.allocated is
+# unaffected, so the memory columns stay correct. Only set when jemalloc is preloaded.
 malloc_conf := if jemalloc == "" { "" } else { "dirty_decay_ms:-1,muzzy_decay_ms:-1" }
 
-# Rank codecs over a .difr body by the M metric. jemalloc is LD_PRELOADed so the
-# max/mean MB columns get real numbers (install it system-wide, e.g.
-# `dnf install jemalloc`, or set LD_PRELOAD to your own build); without it the
-# memory columns blank out and the rest of the benchmark is unaffected. (mimalloc's
-# distro build compiles its stat counters out, so it cannot report this.) MALLOC_CONF
-# pins page decay off so profiling does not slow the timed loops (see malloc_conf).
+# Rank codecs over a .difr body by the M metric. jemalloc is LD_PRELOADed by default so
+# the max/mean MB columns get real numbers (install it system-wide, e.g. `dnf install
+# jemalloc`, or set LD_PRELOAD to your own build). For accurate throughput, disable
+# profiling with an explicit empty preload: `LD_PRELOAD= just bench-codecs ...` -- the
+# columns then blank but the timed loops run on glibc. The bare `-` (not `:-`) lets an
+# empty value through. (mimalloc's distro build compiles its stat counters out, so it
+# cannot report this.)
 bench-codecs *ARGS:
-    LD_PRELOAD="${LD_PRELOAD:-{{jemalloc}}}" MALLOC_CONF="${MALLOC_CONF:-{{malloc_conf}}}" uv run python -m bench codecs {{ARGS}}
+    LD_PRELOAD="${LD_PRELOAD-{{jemalloc}}}" MALLOC_CONF="${MALLOC_CONF-{{malloc_conf}}}" uv run python -m bench codecs {{ARGS}}
 
-# Compare DIF against PNG / WebP / JXL / AVIF / GIF. See bench-codecs re: jemalloc
-# (LD_PRELOAD) + MALLOC_CONF for the max/mean MB columns.
+# Compare DIF against PNG / WebP / JXL / AVIF / GIF. See bench-codecs re: jemalloc:
+# preloaded by default for the max/mean MB columns; `LD_PRELOAD= just bench-formats
+# ...` disables it for accurate timings.
 bench-formats *ARGS:
-    LD_PRELOAD="${LD_PRELOAD:-{{jemalloc}}}" MALLOC_CONF="${MALLOC_CONF:-{{malloc_conf}}}" uv run python -m bench formats {{ARGS}}
+    LD_PRELOAD="${LD_PRELOAD-{{jemalloc}}}" MALLOC_CONF="${MALLOC_CONF-{{malloc_conf}}}" uv run python -m bench formats {{ARGS}}
 
 # Python test suite (run `just py` first so the `dif` module exists).
 py-test:
