@@ -177,30 +177,29 @@ fn grow_text_mask(
         *slot = core[p] == RegionClass::Foreground;
     }
     for _ in 0..TEXT_GROW {
+        // Within a pass every `add[p]` reads the frozen `mask` (and `energy`) and
+        // writes only its own slot, so the pass bands over threads identically to a
+        // serial sweep; the `mask |= add` merge is the sequential barrier between
+        // passes. `fill_rows` falls back to serial for small frames.
         let mut add = alloc::vec![false; n];
-        for y in 0..h {
-            for x in 0..w {
-                let p = y * w + x;
-                if mask[p] || energy[p] <= aa_detect::TAU_EDGE {
-                    continue;
-                }
-                let mut touch = false;
-                'scan: for dy in -1isize..=1 {
-                    for dx in -1isize..=1 {
-                        let nx = x as isize + dx;
-                        let ny = y as isize + dy;
-                        if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
-                            continue;
-                        }
-                        if mask[ny as usize * w + nx as usize] {
-                            touch = true;
-                            break 'scan;
-                        }
+        aa_detect::fill_rows(&mut add, w, h, |x, y, p| {
+            if mask[p] || energy[p] <= aa_detect::TAU_EDGE {
+                return false;
+            }
+            for dy in -1isize..=1 {
+                for dx in -1isize..=1 {
+                    let nx = x as isize + dx;
+                    let ny = y as isize + dy;
+                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                        continue;
+                    }
+                    if mask[ny as usize * w + nx as usize] {
+                        return true;
                     }
                 }
-                add[p] = touch;
             }
-        }
+            false
+        });
         for (m, a) in mask.iter_mut().zip(add.iter()) {
             *m |= *a;
         }
