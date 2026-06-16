@@ -205,6 +205,13 @@ def main(argv: list[str] | None = None) -> int:
         help="only measure DIF codecs and report M relative to the store baseline",
     )
     f.add_argument(
+        "--two-palette",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="also emit a 2-palette (-2p, light+dark) row for every swept codec "
+        "variant, not just the shipped triplet headline",
+    )
+    f.add_argument(
         "--out",
         default="bench-formats.tsv",
         help="per-(image,format) results as TSV (default: bench-formats.tsv)",
@@ -309,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
                     num_threads=args.num_threads,
                     index_widths=args.index_width,
                     dif_only=args.dif_only,
+                    two_palette=args.two_palette,
                 )
                 print()
                 w.writerows(cmp.iter_rows(p, rows))

@@ -81,6 +81,36 @@ def test_dif_palette_frame_cartesian(tmp_path):
     assert "dif-zst3-PK6-st-8b" in names
 
 
+def test_two_palette_adds_dual_theme_rows(tmp_path):
+    # --two-palette: every swept variant also gets a -2p (light+dark) row, while
+    # the shipped-triplet headline -2p stays put.
+    p = _toy_png(tmp_path / "d.png")
+    rows = compare_image(p, repeats=1, outer_codecs=("zstd-3",), two_palette=True)
+    names = {r.name for r in rows}
+    assert f"{_dif_label(*DIF_TRIPLET, 8)}-2p" in names  # headline
+    assert "dif-zst3-zst16-zst10-8b" in names  # single theme
+    assert "dif-zst3-zst16-zst10-8b-2p" in names  # dual theme variant
+
+
+def test_two_palette_skips_triplet_duplicate(tmp_path):
+    # The swept combo that equals the shipped triplet must not double-emit a -2p
+    # row --- the headline already covers it.
+    p = _toy_png(tmp_path / "d.png")
+    rows = compare_image(p, repeats=1, outer_codecs=("store",), two_palette=True)
+    label = f"{_dif_label(*DIF_TRIPLET, 8)}-2p"
+    assert [r.name for r in rows].count(label) == 1
+
+
+def test_two_palette_dif_only(tmp_path):
+    p = _toy_png(tmp_path / "d.png")
+    rows = compare_image(
+        p, repeats=1, outer_codecs=("zstd-3",), dif_only=True, two_palette=True
+    )
+    names = {r.name for r in rows}
+    assert "dif-zst3-zst16-zst10-8b" in names
+    assert "dif-zst3-zst16-zst10-8b-2p" in names
+
+
 def test_unavailable_codec_is_annotated_not_raised(tmp_path):
     # A bogus DIF codec name fails inside the measured closure; the row comes
     # back available=False with a note instead of bubbling an exception.

@@ -159,6 +159,7 @@ def compare_image(
     num_threads: int = 1,
     index_widths: tuple[str, ...] | list[str] = ("auto",),
     dif_only: bool = False,
+    two_palette: bool = False,
 ) -> list[FormatResult]:
     # Render `.drawio` to PNG once; every format encoder then sees the same
     # raster (PIL/imagecodecs can't open the drawio XML directly).
@@ -234,34 +235,43 @@ def compare_image(
             if stream:
                 print(_dif_row_line(store_r))
 
+            def dif_only_row(outer: str, p: str, f: str, strategy: str):
+                # "-2p" tags the dual-theme (light+dark) build; "keep" is one theme.
+                suffix = "-2p" if strategy == "arithmetic" else ""
+                r = _measure(
+                    _dif_label(outer, p, f, bits) + suffix,
+                    dif_enc(strategy, outer, p, f, iw),
+                    dif_dec,
+                    None,
+                    nbytes,
+                    repeats,
+                    note,
+                )
+                if (
+                    store_r.available
+                    and r.available
+                    and r.enc_mbps > 0
+                    and r.dec_mbps > 0
+                ):
+                    r.m = compute_m(
+                        store_r.size / r.size,
+                        store_r.enc_mbps / r.enc_mbps,
+                        store_r.dec_mbps / r.dec_mbps,
+                    )
+                rows.append(r)
+                if stream:
+                    print(_dif_row_line(r))
+
             for outer in outer_codecs:
                 for pal in pcs:
                     for frm in fcs:
                         p = outer if pal is None else pal
                         f = outer if frm is None else frm
-                        r = _measure(
-                            _dif_label(outer, p, f, bits),
-                            dif_enc("keep", outer, p, f, iw),
-                            dif_dec,
-                            None,
-                            nbytes,
-                            repeats,
-                            note,
-                        )
-                        if (
-                            store_r.available
-                            and r.available
-                            and r.enc_mbps > 0
-                            and r.dec_mbps > 0
-                        ):
-                            r.m = compute_m(
-                                store_r.size / r.size,
-                                store_r.enc_mbps / r.enc_mbps,
-                                store_r.dec_mbps / r.dec_mbps,
-                            )
-                        rows.append(r)
-                        if stream:
-                            print(_dif_row_line(r))
+                        dif_only_row(outer, p, f, "keep")
+                        # --two-palette: also measure the same variant carrying
+                        # both themes (arithmetic dark synthesis).
+                        if two_palette:
+                            dif_only_row(outer, p, f, "arithmetic")
 
         return rows
 
@@ -284,6 +294,7 @@ def compare_image(
         # Headline row: the shipped triplet (store / zstd-16 / zstd-10) carrying
         # *both* themes (light + dark) --- the real `.dif` product, not directly
         # size-comparable to the single-theme formats below. `-2p` = 2-palette.
+        # `--two-palette` widens this to a `-2p` row per swept variant below.
         outer, palette, frame = DIF_TRIPLET
         emit(
             f"{_dif_label(outer, palette, frame, bits)}-2p",
@@ -309,6 +320,17 @@ def compare_image(
                         None,
                         note,
                     )
+                    # --two-palette: also size this variant carrying *both*
+                    # themes (arithmetic dark synthesis). The shipped triplet is
+                    # skipped --- the headline `-2p` row above already covers it.
+                    if two_palette and (outer, p, f) != DIF_TRIPLET:
+                        emit(
+                            f"{_dif_label(outer, p, f, bits)}-2p",
+                            dif_enc("arithmetic", outer, p, f, iw),
+                            dif_dec,
+                            None,
+                            note,
+                        )
 
     # avif/jxl pinned to their library's *native default* effort knob so the
     # comparison is reproducible: libjxl effort=7, libavif speed=6. (imagecodecs
