@@ -306,10 +306,13 @@ pub fn build_regional(
         ));
         id_of.insert(*key, i as u32);
     }
-    let dense_idx: Vec<u32> = rgba
-        .chunks_exact(4)
-        .map(|c| id_of[&u32::from_le_bytes([c[0], c[1], c[2], c[3]])])
-        .collect();
+    // Per-pixel color id: an independent read-only `id_of` lookup, so band it over
+    // threads for large frames (serial under fill_rows' threshold).
+    let mut dense_idx = alloc::vec![0u32; px];
+    aa_detect::fill_rows(&mut dense_idx, w, h, |_x, _y, p| {
+        let o = p * 4;
+        id_of[&u32::from_le_bytes([rgba[o], rgba[o + 1], rgba[o + 2], rgba[o + 3]])]
+    });
 
     // PREPROCESS: classify the raw pixels into a TEXT mask. The region pass finds
     // the glyph/thin-stroke cores (Foreground); the core is then GROWN into the
@@ -410,12 +413,13 @@ pub fn build_regional(
     let fin_light: Vec<Rgba> = order.iter().map(|&o| fin_light[o as usize]).collect();
     let fin_dark: Vec<Rgba> = order.iter().map(|&o| fin_dark[o as usize]).collect();
 
-    let indices: Vec<u64> = (0..px)
-        .map(|p| {
-            let prov = key_index[&(dense_idx[p], cls[p])];
-            old_to_new[prov_to_final[prov as usize] as usize] as u64
-        })
-        .collect();
+    // Final per-pixel index: independent read-only lookups (key_index ->
+    // prov_to_final -> old_to_new), banded over threads for large frames.
+    let mut indices = alloc::vec![0u64; px];
+    aa_detect::fill_rows(&mut indices, w, h, |_x, _y, p| {
+        let prov = key_index[&(dense_idx[p], cls[p])];
+        old_to_new[prov_to_final[prov as usize] as usize] as u64
+    });
 
     let img = DifImage {
         width,
