@@ -9,8 +9,7 @@ use alloc::vec::Vec;
 
 use crate::{
     ColorDepth, DifError, DifImage, Frame, IndexWidth, RegionClass, Result, Rgba, Strategy, Theme,
-    dark_color_for, derive_dark_base_color, derive_dark_palette, indexed_from_rgba8, oklab_close,
-    text_dark_for,
+    dark_color_for, derive_dark_base_color, derive_dark_palette, indexed_from_rgba8, text_dark_for,
 };
 use crate::{aa_detect, abilities, derive, regions};
 
@@ -60,26 +59,47 @@ fn merge_splits(
     use rustc_hash::FxHashMap;
 
     let n = cid.len();
+    // Precompute each provisional dark's OKLab once: the feature merge below would
+    // otherwise reconvert both sides of every candidate pair (`oklab_close`).
+    let max = depth.max_value() as f64;
+    let dark_lab: Vec<[f64; 3]> = prov_dark
+        .iter()
+        .map(|&c| {
+            let o = derive::to_oklab(c, max);
+            [o.l, o.a, o.b]
+        })
+        .collect();
+    let close = |i: usize, j: usize| -> bool {
+        if prov_dark[i] == prov_dark[j] {
+            return true;
+        }
+        let (a, b) = (dark_lab[i], dark_lab[j]);
+        let d = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+        d.sqrt() <= MERGE_EPS
+    };
+
+    // Feature merge: only entries sharing a color id can merge, so compare within
+    // a per-`cid` bucket instead of scanning all kept entries (was O(kept^2); a
+    // 16-bit split palette reached tens of thousands of entries). Bucket order
+    // mirrors `kept` insertion order, so the first-match `break` is unchanged.
     let mut remap: Vec<u32> = (0..n as u32).collect();
     let mut kept: Vec<u32> = Vec::new();
+    let mut by_cid: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     for i in 0..n as u32 {
+        let bucket = by_cid.entry(cid[i as usize]).or_default();
         let mut merged = None;
-        for &j in &kept {
-            if cid[j as usize] == cid[i as usize]
-                && oklab_close(
-                    prov_dark[i as usize],
-                    prov_dark[j as usize],
-                    depth,
-                    MERGE_EPS,
-                )
-            {
+        for &j in bucket.iter() {
+            if close(i as usize, j as usize) {
                 merged = Some(j);
                 break;
             }
         }
         match merged {
             Some(j) => remap[i as usize] = j,
-            None => kept.push(i),
+            None => {
+                kept.push(i);
+                bucket.push(i);
+            }
         }
     }
 
@@ -299,7 +319,8 @@ pub fn build_regional(
     // text region, while adjacent solid fills stay background. This replaces the
     // per-pixel AA filter, which could not reliably catch text.
     let core = regions::classify_regions(w, h, &dense_idx, &raw_palette, depth);
-    let (lp, cp) = aa_detect::oklab_lc_planes_rgba8(rgba, w, h);
+    let (lp, cp) =
+        aa_detect::oklab_lc_planes_indexed(&dense_idx, &raw_palette, depth.max_value() as f64);
     let energy = aa_detect::edge_energy_planes(&lp, &cp, w, h);
     let is_text = grow_text_mask(w, h, &core, &energy);
     let cls: Vec<Classifier> = (0..px)

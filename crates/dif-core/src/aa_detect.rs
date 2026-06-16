@@ -42,6 +42,31 @@ pub fn oklab_lc_planes_rgba8(rgba: &[u8], w: usize, h: usize) -> (Vec<f64>, Vec<
     (l, c)
 }
 
+/// Build OKLab lightness `L` and chroma planes from an indexed image: convert
+/// each palette color once, then scatter the result through the per-pixel id
+/// plane `idx`. Bit-identical to [`oklab_lc_planes_rgba8`] on the same pixels
+/// (alpha ignored the same way), but pays one sRGB->OKLab conversion per unique
+/// color instead of one per pixel -- the region build's hot path, where a
+/// diagram has thousands of pixels per color. `max` is the channel max for the
+/// palette's depth.
+pub fn oklab_lc_planes_indexed(idx: &[u32], palette: &[Rgba], max: f64) -> (Vec<f64>, Vec<f64>) {
+    let table: Vec<(f64, f64)> = palette
+        .iter()
+        .map(|&c| {
+            let lab = oklab_of(c, max);
+            (lab[0], (lab[1] * lab[1] + lab[2] * lab[2]).sqrt())
+        })
+        .collect();
+    let mut l = vec![0.0; idx.len()];
+    let mut c = vec![0.0; idx.len()];
+    for (p, &id) in idx.iter().enumerate() {
+        let (li, ci) = table[id as usize];
+        l[p] = li;
+        c[p] = ci;
+    }
+    (l, c)
+}
+
 /// Sample `plane` at `(x, y)` with edge-replicate clamping.
 #[inline]
 fn at(plane: &[f64], w: usize, h: usize, x: isize, y: isize) -> f64 {
